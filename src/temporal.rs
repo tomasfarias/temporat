@@ -17,12 +17,13 @@ pub async fn list_page(
     columns: &[Column],
     page_size: u16,
     next_page_token: Vec<u8>,
+    query: &str,
 ) -> Result<Page> {
     let request = ListWorkflowExecutionsRequest {
         namespace: client.options().namespace.clone(),
         page_size: i32::from(page_size),
         next_page_token,
-        query: String::new(),
+        query: query.to_owned(),
     };
     let response = tokio::time::timeout(
         Duration::from_secs(30),

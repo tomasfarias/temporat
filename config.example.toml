@@ -15,6 +15,13 @@ columns = ["workflow_id", "workflow_type", "status", "start_time", "close_time"]
 # Also available: run_id, task_queue, history_length.
 # By default, request one screen of rows per page. Optional fixed override:
 # page_size = 100
+# default_query = "Running"
+
+# Named Temporal visibility queries. No default_query means all workflows.
+[queries]
+All = ""
+Running = "ExecutionStatus = 'Running'"
+Failed = "ExecutionStatus = 'Failed'"
 
 # Single-character bindings; Ctrl-C always quits.
 [keybindings]

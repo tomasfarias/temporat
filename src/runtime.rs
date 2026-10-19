@@ -65,6 +65,7 @@ async fn execute(
                     &config.table.columns,
                     page_size,
                     token,
+                    config.initial_query(),
                 )
                 .await
             }

@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
             &config.table.columns,
             config.table.page_size.unwrap_or(1),
             Vec::new(),
+            config.initial_query(),
         )
         .await?;
         println!(

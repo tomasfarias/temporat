@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::ErrorKind,
     path::{Path, PathBuf},
@@ -13,6 +14,20 @@ pub struct Config {
     pub connection: Connection,
     pub table: Table,
     pub keybindings: crate::input::Keybindings,
+    pub queries: BTreeMap<String, String>,
+    #[serde(skip)]
+    pub path: PathBuf,
+}
+
+impl Config {
+    pub fn initial_query(&self) -> &str {
+        self.table
+            .default_query
+            .as_ref()
+            .and_then(|name| self.queries.get(name))
+            .map(String::as_str)
+            .unwrap_or_default()
+    }
 }
 
 // Deliberately no Debug: this structure contains credentials.
@@ -47,6 +62,7 @@ impl Default for Connection {
 pub struct Table {
     pub columns: Vec<Column>,
     pub page_size: Option<u16>,
+    pub default_query: Option<String>,
 }
 
 impl Default for Table {
@@ -60,6 +76,7 @@ impl Default for Table {
                 Column::CloseTime,
             ],
             page_size: None,
+            default_query: None,
         }
     }
 }
@@ -140,9 +157,22 @@ fn parse(source: &str, path: &Path, get: impl Fn(&str) -> Option<String>) -> Res
             connection.insert(field.into(), toml::Value::String(value));
         }
     }
-    let config: Config = document.try_into().map_err(|error: toml::de::Error| {
+    let mut config: Config = document.try_into().map_err(|error: toml::de::Error| {
         anyhow::anyhow!("invalid settings: {}", error.message())
     })?;
+    config.path = path.to_path_buf();
+    if let Some(name) = &config.table.default_query
+        && !config.queries.contains_key(name)
+    {
+        bail!("table.default_query must name a configured query");
+    }
+    if config
+        .queries
+        .keys()
+        .any(|name| name.trim().is_empty() || name.chars().any(char::is_control))
+    {
+        bail!("query names must be nonempty and contain no control characters");
+    }
     config.keybindings.validate()?;
     if config.connection.namespace.trim().is_empty() {
         bail!("connection.namespace must not be empty");
@@ -260,5 +290,15 @@ mod tests {
     fn preserves_column_order() {
         let config = read("[table]\ncolumns = ['status', 'workflow_id']").unwrap();
         assert_eq!(config.table.columns, [Column::Status, Column::WorkflowId]);
+    }
+
+    #[test]
+    fn resolves_named_startup_query_and_retains_config_path() {
+        let config = read("[table]\ndefault_query = 'Running'\n[queries]\nRunning = \"ExecutionStatus = 'Running'\"\nAll = ''").unwrap();
+        assert_eq!(config.initial_query(), "ExecutionStatus = 'Running'");
+        assert_eq!(config.path, Path::new("/config/temporat/config.toml"));
+        assert_eq!(read("").unwrap().initial_query(), "");
+        assert!(read("[table]\ndefault_query = 'Missing'").is_err());
+        assert!(read("[queries]\n' ' = ''").is_err());
     }
 }
