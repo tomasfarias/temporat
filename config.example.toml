@@ -3,7 +3,8 @@
 address = "http://localhost:7233" # TEMPORAL_ADDRESS
 namespace = "default" # TEMPORAL_NAMESPACE
 # api_key = "..." # TEMPORAL_API_KEY; preferred over client certificates
-# Use https:// for TLS. Certificate files are PEM, relative to this file.
+# API keys and TLS settings require an https:// address.
+# Certificate files are PEM, relative to this file (environment paths use cwd).
 # tls_ca = "ca.pem" # TEMPORAL_TLS_CA
 # tls_cert = "client.pem" # TEMPORAL_TLS_CERT
 # tls_key = "client.key" # TEMPORAL_TLS_KEY

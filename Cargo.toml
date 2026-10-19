@@ -11,6 +11,8 @@ clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 ratatui = "0.30.2"
 serde = { version = "1", features = ["derive"] }
+temporalio-client = { version = "1.1", default-features = false, features = ["tls-ring"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 toml = "1"
 
 [dev-dependencies]
