@@ -18,7 +18,11 @@ pub async fn run(
     config: Arc<Config>,
     offline: bool,
 ) -> Result<()> {
-    crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::EnableBracketedPaste,
+        crossterm::event::EnableMouseCapture
+    )?;
     let _input_mode = InputMode;
     let mut model = Model::new(&config, offline);
     app::update(&mut model, Message::Resize(terminal.size()?.height));
@@ -38,7 +42,11 @@ pub async fn run(
         terminal.draw(|frame| view::view(frame, &model, &config))?;
         let message = tokio::select! {
             event = events.next() => match event.context("terminal event stream closed")?? {
-                Event::Key(key) => input::message(&config.keybindings, model.query.focus, key),
+                Event::Key(key) => input::message(&config.keybindings, &model.query, key),
+                Event::Mouse(event) => {
+                    let size = terminal.size()?;
+                    input::mouse(&model.query, event, view::areas(ratatui::layout::Rect::new(0, 0, size.width, size.height))[1])
+                },
                 Event::Paste(text) if model.query.focus == crate::query::Focus::Input => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
                 Event::Resize(_, height) => Some(Message::Resize(height)),
                 _ => None,
@@ -62,7 +70,11 @@ struct InputMode;
 
 impl Drop for InputMode {
     fn drop(&mut self) {
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableBracketedPaste,
+            crossterm::event::DisableMouseCapture
+        );
     }
 }
 

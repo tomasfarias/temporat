@@ -34,32 +34,20 @@ impl Column {
     }
 }
 
-pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
-    let [status, query, body, help] = Layout::vertical([
+pub fn areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 4] {
+    Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area)
+}
+
+pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
+    let [status, query, body, help] = areas(frame.area());
     let editing = model.query.focus == crate::query::Focus::Input;
-    let inner = query.inner(ratatui::layout::Margin::new(1, 1));
-    let (text, cursor) = model.query.input.visible(inner.width);
-    frame.render_widget(
-        Paragraph::new(text).block(
-            Block::bordered()
-                .title("Query · Enter applies · Esc cancels")
-                .border_style(Style::default().fg(if editing {
-                    Color::Cyan
-                } else {
-                    Color::Reset
-                })),
-        ),
-        query,
-    );
-    if editing && inner.width > 0 && inner.height > 0 {
-        frame.set_cursor_position((inner.x + cursor, inner.y));
-    }
+    crate::query_view::bar(frame, &model.query, query);
     frame.render_widget(
         Paragraph::new(format!(
             "{} | {}",
@@ -116,6 +104,7 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         }),
         help,
     );
+    crate::query_view::modal(frame, &model.query, &config.keybindings);
 }
 
 #[cfg(test)]

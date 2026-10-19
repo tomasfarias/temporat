@@ -4,7 +4,9 @@ use crate::{
     text_input::Edit,
 };
 use anyhow::{Result, bail};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +18,7 @@ pub enum Action {
     Refresh,
     Quit,
     Query,
+    LoadQuery,
 }
 
 #[derive(Deserialize)]
@@ -28,6 +31,7 @@ pub struct Keybindings {
     pub refresh: char,
     pub quit: char,
     pub query: char,
+    pub load_query: char,
 }
 
 impl Default for Keybindings {
@@ -40,12 +44,13 @@ impl Default for Keybindings {
             refresh: 'r',
             quit: 'q',
             query: '/',
+            load_query: 'o',
         }
     }
 }
 
 impl Keybindings {
-    fn bindings(&self) -> [(char, Action); 7] {
+    fn bindings(&self) -> [(char, Action); 8] {
         [
             (self.up, Action::Up),
             (self.down, Action::Down),
@@ -54,6 +59,7 @@ impl Keybindings {
             (self.refresh, Action::Refresh),
             (self.quit, Action::Quit),
             (self.query, Action::Query),
+            (self.load_query, Action::LoadQuery),
         ]
     }
 
@@ -99,7 +105,7 @@ impl Keybindings {
     }
 }
 
-pub fn message(keys: &Keybindings, focus: Focus, key: KeyEvent) -> Option<Message> {
+pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Option<Message> {
     if key.kind == KeyEventKind::Release {
         return None;
     }
@@ -116,10 +122,43 @@ pub fn message(keys: &Keybindings, focus: Focus, key: KeyEvent) -> Option<Messag
     if let Some(message) = query_message {
         return Some(Message::Query(message));
     }
-    if focus == Focus::Input {
+    if model.dialog.is_some() {
+        let delta = match keys.action(key) {
+            Some(Action::Up) => -1,
+            Some(Action::Down) => 1,
+            _ if key.code == KeyCode::Up => -1,
+            _ if key.code == KeyCode::Down => 1,
+            _ => return None,
+        };
+        return Some(Message::Query(query::Message::MoveSelection(delta)));
+    }
+    if model.focus == Focus::Input {
         return edit(key).map(|edit| Message::Query(query::Message::Edit(edit)));
     }
-    keys.action(key).map(Message::Action)
+    if model.focus == Focus::Table {
+        keys.action(key).map(Message::Action)
+    } else {
+        None
+    }
+}
+
+pub fn mouse(
+    model: &query::QueryBar,
+    event: MouseEvent,
+    area: ratatui::layout::Rect,
+) -> Option<Message> {
+    if model.dialog.is_some() || event.kind != MouseEventKind::Down(MouseButton::Left) {
+        return None;
+    }
+    let [input, load] = crate::query_view::controls(area);
+    let position = (event.column, event.row).into();
+    if input.contains(position) {
+        Some(Message::Query(query::Message::Focus(Focus::Input)))
+    } else if load.contains(position) {
+        Some(Message::Query(query::Message::OpenLoad))
+    } else {
+        Some(Message::Query(query::Message::Focus(Focus::Table)))
+    }
 }
 
 fn edit(key: KeyEvent) -> Option<Edit> {
@@ -189,15 +228,17 @@ mod tests {
 
     #[test]
     fn typing_in_query_does_not_trigger_navigation_or_quit() {
+        let mut model = query::QueryBar::new("", Default::default());
+        model.focus = Focus::Input;
         for c in ['h', 'j', 'k', 'l', 'q', 'r', '/'] {
             assert!(
-                matches!(message(&Keybindings::default(), Focus::Input, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)), Some(Message::Query(query::Message::Edit(Edit::Insert(text)))) if text == c.to_string())
+                matches!(message(&Keybindings::default(), &model, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)), Some(Message::Query(query::Message::Edit(Edit::Insert(text)))) if text == c.to_string())
             );
         }
         assert!(matches!(
             message(
                 &Keybindings::default(),
-                Focus::Input,
+                &model,
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
             ),
             Some(Message::Action(Action::Quit))

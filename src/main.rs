@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod input;
 mod query;
+mod query_view;
 mod runtime;
 mod temporal;
 mod text_input;

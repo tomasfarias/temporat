@@ -80,7 +80,7 @@ impl Model {
             visible_rows: 1,
             status: "Offline keybinding preview".into(),
             quit: false,
-            query: QueryBar::new(config.initial_query()),
+            query: QueryBar::new(config.initial_query(), config.queries.clone()),
             generation: 0,
             offline: true,
             loading: None,
@@ -128,6 +128,9 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                 model.desired_rows = model.visible_rows;
                 return begin_load(model, LoadKind::Replace);
             }
+        }
+        Message::Action(Action::LoadQuery) => {
+            query::update(&mut model.query, query::Message::OpenLoad);
         }
         Message::Resize(height) => {
             model.visible_rows = usize::from(height.saturating_sub(8)).max(1)
