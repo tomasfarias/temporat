@@ -13,3 +13,12 @@ namespace = "default" # TEMPORAL_NAMESPACE
 columns = ["workflow_id", "workflow_type", "status", "start_time"]
 # Also available: run_id, close_time, task_queue, history_length.
 page_size = 100
+
+# Single-character bindings; Ctrl-C always quits.
+[keybindings]
+up = "k"
+down = "j"
+left = "h"
+right = "l"
+refresh = "r"
+quit = "q"

@@ -8,6 +8,8 @@ description = "A Temporal workflow TUI"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+ratatui = "0.30.2"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 

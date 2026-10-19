@@ -12,6 +12,7 @@ use serde::Deserialize;
 pub struct Config {
     pub connection: Connection,
     pub table: Table,
+    pub keybindings: crate::input::Keybindings,
 }
 
 // Deliberately no Debug: this structure contains credentials.
@@ -141,6 +142,7 @@ fn parse(source: &str, path: &Path, get: impl Fn(&str) -> Option<String>) -> Res
     let config: Config = document.try_into().map_err(|error: toml::de::Error| {
         anyhow::anyhow!("invalid settings: {}", error.message())
     })?;
+    config.keybindings.validate()?;
     if config.connection.namespace.trim().is_empty() {
         bail!("connection.namespace must not be empty");
     }
