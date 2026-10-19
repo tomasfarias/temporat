@@ -71,6 +71,21 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     let mut state = TableState::default()
         .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset));
     frame.render_stateful_widget(table, body, &mut state);
+    if model.rows.is_empty() {
+        let area = body.inner(ratatui::layout::Margin::new(1, 1));
+        let [_, message] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+        frame.render_widget(
+            Paragraph::new(if model.status.starts_with("Loading") {
+                "Loading…"
+            } else if model.status.starts_with("Error") {
+                "Unable to load workflows; refresh to retry."
+            } else {
+                "No workflows found."
+            }),
+            message,
+        );
+    }
     frame.render_widget(Paragraph::new(config.keybindings.help()), help);
 }
 
@@ -96,5 +111,19 @@ mod tests {
         let text = format!("{:?}", terminal.backend().buffer());
         assert!(!text.contains("Status"));
         assert!(text.contains("Workflow ID"));
+    }
+
+    #[test]
+    fn renders_empty_results_and_survives_tiny_terminals() {
+        let config = Config::default();
+        let mut model = Model::new(&config, false);
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+        assert!(format!("{:?}", terminal.backend().buffer()).contains("No workflows found."));
+        for (width, height) in [(0, 0), (1, 1), (5, 3)] {
+            crate::app::update(&mut model, crate::app::Message::Resize(height));
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+        }
     }
 }
