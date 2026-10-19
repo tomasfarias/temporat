@@ -1,0 +1,15 @@
+# All settings are optional. TOML values override environment variables.
+[connection]
+address = "http://localhost:7233" # TEMPORAL_ADDRESS
+namespace = "default" # TEMPORAL_NAMESPACE
+# api_key = "..." # TEMPORAL_API_KEY; preferred over client certificates
+# Use https:// for TLS. Certificate files are PEM, relative to this file.
+# tls_ca = "ca.pem" # TEMPORAL_TLS_CA
+# tls_cert = "client.pem" # TEMPORAL_TLS_CERT
+# tls_key = "client.key" # TEMPORAL_TLS_KEY
+# tls_domain = "temporal.example.com" # TEMPORAL_TLS_DOMAIN
+
+[table]
+columns = ["workflow_id", "workflow_type", "status", "start_time"]
+# Also available: run_id, close_time, task_queue, history_length.
+page_size = 100
