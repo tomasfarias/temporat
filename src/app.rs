@@ -10,7 +10,7 @@ pub struct Model {
     pub rows: Vec<Vec<String>>,
     pub selected: usize,
     pub row_offset: usize,
-    pub column_offset: usize,
+    pub selected_column: usize,
     pub visible_rows: usize,
     pub status: String,
     pub quit: bool,
@@ -62,7 +62,7 @@ impl Model {
                 .collect(),
             selected: 0,
             row_offset: 0,
-            column_offset: 0,
+            selected_column: 0,
             visible_rows: 1,
             status: "Offline keybinding preview".into(),
             quit: false,
@@ -84,11 +84,11 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             model.selected = (model.selected + 1).min(model.rows.len().saturating_sub(1))
         }
         Message::Action(Action::Left) => {
-            model.column_offset = model.column_offset.saturating_sub(1)
+            model.selected_column = model.selected_column.saturating_sub(1)
         }
         Message::Action(Action::Right) => {
-            model.column_offset =
-                (model.column_offset + 1).min(model.columns.len().saturating_sub(1))
+            model.selected_column =
+                (model.selected_column + 1).min(model.columns.len().saturating_sub(1))
         }
         Message::Action(Action::Refresh) => return begin_load(model, LoadKind::Replace),
         Message::Resize(height) => {
@@ -164,7 +164,7 @@ mod tests {
         for _ in 0..50 {
             update(&mut model, Message::Action(Action::Right));
         }
-        assert_eq!(model.column_offset, model.columns.len() - 1);
+        assert_eq!(model.selected_column, model.columns.len() - 1);
     }
 
     #[test]

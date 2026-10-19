@@ -48,13 +48,13 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         )),
         status,
     );
-    let columns = &model.columns[model.column_offset..];
+    let columns = &model.columns;
     let rows = model
         .rows
         .iter()
         .skip(model.row_offset)
         .take(model.visible_rows)
-        .map(|row| Row::new(row.iter().skip(model.column_offset).map(String::as_str)));
+        .map(|row| Row::new(row.iter().map(String::as_str)));
     let table = Table::new(
         rows,
         columns
@@ -66,10 +66,13 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
             .style(Style::default().fg(Color::Cyan)),
     )
     .block(Block::bordered().title("Workflows"))
-    .row_highlight_style(Style::default().bg(Color::DarkGray));
+    .row_highlight_style(Style::default().bg(Color::DarkGray))
+    .column_highlight_style(Style::default().bg(Color::Blue))
+    .cell_highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
     // Widget state is local: rendering never changes the application model.
     let mut state = TableState::default()
-        .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset));
+        .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset))
+        .with_selected_column(model.selected_column);
     frame.render_stateful_widget(table, body, &mut state);
     if model.rows.is_empty() {
         let area = body.inner(ratatui::layout::Margin::new(1, 1));
@@ -95,7 +98,7 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
-    fn renders_configured_columns_in_order_and_scrolls_horizontally() {
+    fn column_navigation_moves_highlight_without_moving_content() {
         let mut config = Config::default();
         config.table.columns = vec![Column::Status, Column::WorkflowId];
         let mut model = Model::preview(&config);
@@ -103,14 +106,28 @@ mod tests {
         terminal.draw(|frame| view(frame, &model, &config)).unwrap();
         let text = format!("{:?}", terminal.backend().buffer());
         assert!(text.find("Status").unwrap() < text.find("Workflow ID").unwrap());
+        let before = terminal.backend().buffer().clone();
         crate::app::update(
             &mut model,
             crate::app::Message::Action(crate::input::Action::Right),
         );
         terminal.draw(|frame| view(frame, &model, &config)).unwrap();
         let text = format!("{:?}", terminal.backend().buffer());
-        assert!(!text.contains("Status"));
+        assert!(text.contains("Status"));
         assert!(text.contains("Workflow ID"));
+        let after = terminal.backend().buffer();
+        for (before, after) in before.content.iter().zip(&after.content) {
+            assert_eq!(before.symbol(), after.symbol());
+        }
+        assert_eq!(before[(1, 3)].bg, Color::Cyan);
+        assert_eq!(after[(1, 3)].bg, Color::DarkGray);
+        assert!(
+            after
+                .content
+                .iter()
+                .zip(&before.content)
+                .any(|(after, before)| after.bg == Color::Cyan && before.bg != Color::Cyan)
+        );
     }
 
     #[test]
