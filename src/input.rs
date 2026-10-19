@@ -19,6 +19,7 @@ pub enum Action {
     Quit,
     Query,
     LoadQuery,
+    SaveQuery,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +33,7 @@ pub struct Keybindings {
     pub quit: char,
     pub query: char,
     pub load_query: char,
+    pub save_query: char,
 }
 
 impl Default for Keybindings {
@@ -45,12 +47,13 @@ impl Default for Keybindings {
             quit: 'q',
             query: '/',
             load_query: 'o',
+            save_query: 's',
         }
     }
 }
 
 impl Keybindings {
-    fn bindings(&self) -> [(char, Action); 8] {
+    fn bindings(&self) -> [(char, Action); 9] {
         [
             (self.up, Action::Up),
             (self.down, Action::Down),
@@ -60,6 +63,7 @@ impl Keybindings {
             (self.quit, Action::Quit),
             (self.query, Action::Query),
             (self.load_query, Action::LoadQuery),
+            (self.save_query, Action::SaveQuery),
         ]
     }
 
@@ -99,8 +103,16 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} columns  {} query  Tab focus  {} refresh  {} quit",
-            self.down, self.up, self.left, self.right, self.query, self.refresh, self.quit
+            "{}/{} rows  {}/{} columns  {} query  {} load  {} save  Tab focus  {} refresh  {} quit",
+            self.down,
+            self.up,
+            self.left,
+            self.right,
+            self.query,
+            self.load_query,
+            self.save_query,
+            self.refresh,
+            self.quit
         )
     }
 }
@@ -122,6 +134,9 @@ pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Op
     if let Some(message) = query_message {
         return Some(Message::Query(message));
     }
+    if model.editing() {
+        return edit(key).map(|edit| Message::Query(query::Message::Edit(edit)));
+    }
     if model.dialog.is_some() {
         let delta = match keys.action(key) {
             Some(Action::Up) => -1,
@@ -131,9 +146,6 @@ pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Op
             _ => return None,
         };
         return Some(Message::Query(query::Message::MoveSelection(delta)));
-    }
-    if model.focus == Focus::Input {
-        return edit(key).map(|edit| Message::Query(query::Message::Edit(edit)));
     }
     if model.focus == Focus::Table {
         keys.action(key).map(Message::Action)
@@ -150,12 +162,14 @@ pub fn mouse(
     if model.dialog.is_some() || event.kind != MouseEventKind::Down(MouseButton::Left) {
         return None;
     }
-    let [input, load] = crate::query_view::controls(area);
+    let [input, load, save] = crate::query_view::controls(area);
     let position = (event.column, event.row).into();
     if input.contains(position) {
         Some(Message::Query(query::Message::Focus(Focus::Input)))
     } else if load.contains(position) {
         Some(Message::Query(query::Message::OpenLoad))
+    } else if save.contains(position) {
+        Some(Message::Query(query::Message::OpenSave))
     } else {
         Some(Message::Query(query::Message::Focus(Focus::Table)))
     }
@@ -242,6 +256,46 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
             ),
             Some(Message::Action(Action::Quit))
+        ));
+    }
+
+    #[test]
+    fn buttons_are_clickable_and_modal_input_captures_navigation_keys() {
+        let mut model = query::QueryBar::new("", Default::default());
+        let area = ratatui::layout::Rect::new(0, 1, 80, 3);
+        let [_, load, save] = crate::query_view::controls(area);
+        let click = |column| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(matches!(
+            mouse(&model, click(load.x + 1), area),
+            Some(Message::Query(query::Message::OpenLoad))
+        ));
+        assert!(matches!(
+            mouse(&model, click(save.x + 1), area),
+            Some(Message::Query(query::Message::OpenSave))
+        ));
+        query::update(&mut model, query::Message::OpenSave);
+        assert!(matches!(
+            message(
+                &Keybindings::default(),
+                &model,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)
+            ),
+            Some(Message::Query(query::Message::Edit(Edit::Insert(_))))
+        ));
+        query::update(&mut model, query::Message::Cancel);
+        query::update(&mut model, query::Message::OpenLoad);
+        assert!(matches!(
+            message(
+                &Keybindings::default(),
+                &model,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)
+            ),
+            Some(Message::Query(query::Message::MoveSelection(1)))
         ));
     }
 }

@@ -17,7 +17,6 @@ temporalio-client = { version = "1.1", default-features = false, features = ["tl
 temporalio-common = "1.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 toml = "1"
+toml_edit = "0.25"
 unicode-width = "0.2"
-
-[dev-dependencies]
 tempfile = "3"

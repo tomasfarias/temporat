@@ -4,6 +4,7 @@ mod input;
 mod query;
 mod query_view;
 mod runtime;
+mod saved_queries;
 mod temporal;
 mod text_input;
 mod view;

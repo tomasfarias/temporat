@@ -34,10 +34,36 @@ pub async fn run(
     let mut events = EventStream::new();
     while !model.quit {
         if let Some(effect) = effect.take() {
-            if let Some(request) = request.take() {
-                request.abort();
+            match effect {
+                Effect::LoadPage {
+                    token,
+                    page_size,
+                    query,
+                    generation,
+                } => {
+                    if let Some(request) = request.take() {
+                        request.abort();
+                    }
+                    let config = config.clone();
+                    let client = client.clone();
+                    request = Some(tasks.spawn(async move {
+                        let (client, message) =
+                            load(config, client, token, page_size, query, generation).await;
+                        Completed::Page(client, message)
+                    }));
+                }
+                Effect::SaveQuery { name, query } => {
+                    let path = config.path.clone();
+                    tasks.spawn_blocking(move || {
+                        let result = crate::saved_queries::save(&path, &name, &query)
+                            .map_err(|error| format!("{error:#}"));
+                        Completed::Saved(Message::Query(crate::query::Message::Saved {
+                            name,
+                            result,
+                        }))
+                    });
+                }
             }
-            request = Some(tasks.spawn(execute(config.clone(), client.clone(), effect)));
         }
         terminal.draw(|frame| view::view(frame, &model, &config))?;
         let message = tokio::select! {
@@ -47,16 +73,17 @@ pub async fn run(
                     let size = terminal.size()?;
                     input::mouse(&model.query, event, view::areas(ratatui::layout::Rect::new(0, 0, size.width, size.height))[1])
                 },
-                Event::Paste(text) if model.query.focus == crate::query::Focus::Input => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
+                Event::Paste(text) if model.query.editing() => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
                 Event::Resize(_, height) => Some(Message::Resize(height)),
                 _ => None,
             },
             result = tasks.join_next(), if !tasks.is_empty() => {
                 let result = result.context("request task missing")?;
                 if result.as_ref().is_err_and(|error| error.is_cancelled()) { continue; }
-                let (connection, message) = result.context("request task failed")?;
-                client = connection;
-                Some(message)
+                match result.context("request task failed")? {
+                    Completed::Page(connection, message) => { client = connection; Some(message) }
+                    Completed::Saved(message) => Some(message),
+                }
             }
         };
         if let Some(message) = message {
@@ -78,17 +105,19 @@ impl Drop for InputMode {
     }
 }
 
-async fn execute(
+enum Completed {
+    Page(Option<Client>, Message),
+    Saved(Message),
+}
+
+async fn load(
     config: Arc<Config>,
     mut client: Option<Client>,
-    effect: Effect,
+    token: Vec<u8>,
+    page_size: u16,
+    query: String,
+    generation: u64,
 ) -> (Option<Client>, Message) {
-    let Effect::LoadPage {
-        token,
-        page_size,
-        query,
-        generation,
-    } = effect;
     let result = async {
         if client.is_none() {
             client = Some(temporal::connect(&config.connection).await?);

@@ -36,6 +36,10 @@ pub enum Message {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
+    SaveQuery {
+        name: String,
+        query: String,
+    },
     LoadPage {
         token: Vec<u8>,
         page_size: u16,
@@ -117,20 +121,29 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             query::update(&mut model.query, query::Message::Focus(query::Focus::Input));
         }
         Message::Query(message) => {
-            if query::update(&mut model.query, message).is_some() {
-                // A new query invalidates both cached rows and in-flight page responses.
-                model.generation += 1;
-                model.loading = None;
-                model.rows.clear();
-                model.next_page_token.clear();
-                model.selected = 0;
-                model.row_offset = 0;
-                model.desired_rows = model.visible_rows;
-                return begin_load(model, LoadKind::Replace);
+            match query::update(&mut model.query, message) {
+                Some(query::Command::Save { name, query }) => {
+                    return Some(Effect::SaveQuery { name, query });
+                }
+                Some(query::Command::Apply) => {
+                    // A new query invalidates both cached rows and in-flight page responses.
+                    model.generation += 1;
+                    model.loading = None;
+                    model.rows.clear();
+                    model.next_page_token.clear();
+                    model.selected = 0;
+                    model.row_offset = 0;
+                    model.desired_rows = model.visible_rows;
+                    return begin_load(model, LoadKind::Replace);
+                }
+                None => {}
             }
         }
         Message::Action(Action::LoadQuery) => {
             query::update(&mut model.query, query::Message::OpenLoad);
+        }
+        Message::Action(Action::SaveQuery) => {
+            query::update(&mut model.query, query::Message::OpenSave);
         }
         Message::Resize(height) => {
             model.visible_rows = usize::from(height.saturating_sub(8)).max(1)
