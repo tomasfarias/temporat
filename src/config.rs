@@ -57,6 +57,7 @@ impl Default for Table {
                 Column::WorkflowType,
                 Column::Status,
                 Column::StartTime,
+                Column::CloseTime,
             ],
             page_size: 100,
         }
