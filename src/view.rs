@@ -131,6 +131,25 @@ mod tests {
     }
 
     #[test]
+    fn shrinking_hides_cached_rows_and_growing_reveals_them() {
+        let config = Config::default();
+        let mut model = Model::preview(&config);
+        for (height, last_visible) in [(8, "Preview 3"), (6, "Preview 1"), (8, "Preview 3")] {
+            crate::app::update(&mut model, crate::app::Message::Resize(height));
+            let mut terminal = Terminal::new(TestBackend::new(140, height)).unwrap();
+            terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+            let text = format!("{:?}", terminal.backend().buffer());
+            assert!(text.contains(last_visible));
+            assert!(!text.contains("Preview 4"));
+            if height == 6 {
+                assert!(!text.contains("Preview 2"));
+            }
+            assert_eq!(model.rows.len(), 25);
+            assert_eq!(model.selected, 0);
+        }
+    }
+
+    #[test]
     fn renders_empty_results_and_survives_tiny_terminals() {
         let config = Config::default();
         let mut model = Model::new(&config, false);

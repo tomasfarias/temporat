@@ -46,7 +46,7 @@ impl Default for Connection {
 #[serde(default, deny_unknown_fields)]
 pub struct Table {
     pub columns: Vec<Column>,
-    pub page_size: u16,
+    pub page_size: Option<u16>,
 }
 
 impl Default for Table {
@@ -59,7 +59,7 @@ impl Default for Table {
                 Column::StartTime,
                 Column::CloseTime,
             ],
-            page_size: 100,
+            page_size: None,
         }
     }
 }
@@ -163,7 +163,11 @@ fn parse(source: &str, path: &Path, get: impl Fn(&str) -> Option<String>) -> Res
     if config.table.columns.is_empty() {
         bail!("table.columns must not be empty");
     }
-    if !(1..=1000).contains(&config.table.page_size) {
+    if config
+        .table
+        .page_size
+        .is_some_and(|size| !(1..=1000).contains(&size))
+    {
         bail!("table.page_size must be between 1 and 1000");
     }
     Ok(config)

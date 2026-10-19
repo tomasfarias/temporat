@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         let page = temporal::list_page(
             &client,
             &config.table.columns,
-            config.table.page_size,
+            config.table.page_size.unwrap_or(1),
             Vec::new(),
         )
         .await?;

@@ -13,7 +13,8 @@ namespace = "default" # TEMPORAL_NAMESPACE
 [table]
 columns = ["workflow_id", "workflow_type", "status", "start_time", "close_time"]
 # Also available: run_id, task_queue, history_length.
-page_size = 100
+# By default, request one screen of rows per page. Optional fixed override:
+# page_size = 100
 
 # Single-character bindings; Ctrl-C always quits.
 [keybindings]

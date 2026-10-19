@@ -59,11 +59,11 @@ async fn execute(
             client = Some(temporal::connect(&config.connection).await?);
         }
         match effect {
-            Effect::LoadPage { token } => {
+            Effect::LoadPage { token, page_size } => {
                 temporal::list_page(
                     client.as_ref().expect("connected above"),
                     &config.table.columns,
-                    config.table.page_size,
+                    page_size,
                     token,
                 )
                 .await
