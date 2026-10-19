@@ -2529,12 +2529,14 @@ name = "temporat"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "crossterm",
  "ratatui",
  "serde",
  "tempfile",
  "temporalio-client",
+ "temporalio-common",
  "tokio",
  "toml",
 ]

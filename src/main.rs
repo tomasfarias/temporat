@@ -3,6 +3,7 @@ mod config;
 mod input;
 mod temporal;
 mod view;
+mod workflow;
 
 use std::path::PathBuf;
 
@@ -26,8 +27,19 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let config = config::load(args.config)?;
     if args.check_connection {
-        temporal::connect(&config.connection).await?;
-        println!("Connected to Temporal");
+        let client = temporal::connect(&config.connection).await?;
+        let page = temporal::list_page(
+            &client,
+            &config.table.columns,
+            config.table.page_size,
+            Vec::new(),
+        )
+        .await?;
+        println!(
+            "Connected to Temporal; {} workflows in first page (more: {})",
+            page.rows.len(),
+            !page.next_page_token.is_empty()
+        );
         return Ok(());
     }
     let mut terminal = ratatui::init();

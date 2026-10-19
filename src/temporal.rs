@@ -1,11 +1,48 @@
 use std::{collections::HashMap, fs, path::Path, time::Duration};
 
 use anyhow::{Context, Result, bail};
+use temporalio_client::grpc::WorkflowService;
 use temporalio_client::{
     Client, ClientOptions, ClientTlsOptions, ConnectionOptions, TlsOptions, Url,
 };
+use temporalio_common::protos::temporal::api::workflowservice::v1::ListWorkflowExecutionsRequest;
 
-use crate::config::Connection;
+use crate::{
+    config::{Column, Connection},
+    workflow::{self, Page},
+};
+
+pub async fn list_page(
+    client: &Client,
+    columns: &[Column],
+    page_size: u16,
+    next_page_token: Vec<u8>,
+) -> Result<Page> {
+    let request = ListWorkflowExecutionsRequest {
+        namespace: client.options().namespace.clone(),
+        page_size: i32::from(page_size),
+        next_page_token,
+        query: String::new(),
+    };
+    let response = tokio::time::timeout(
+        Duration::from_secs(30),
+        client
+            .clone()
+            .list_workflow_executions(temporalio_client::tonic::Request::new(request)),
+    )
+    .await
+    .context("listing workflows timed out")?
+    .context("listing workflows")?
+    .into_inner();
+    Ok(Page {
+        rows: response
+            .executions
+            .into_iter()
+            .map(|info| workflow::cells(info, columns))
+            .collect(),
+        next_page_token: response.next_page_token,
+    })
+}
 
 pub async fn connect(config: &Connection) -> Result<Client> {
     let options = connection_options(config)?;
