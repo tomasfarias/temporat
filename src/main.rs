@@ -1,8 +1,10 @@
 mod app;
 mod config;
 mod input;
+mod query;
 mod runtime;
 mod temporal;
+mod text_input;
 mod view;
 mod workflow;
 

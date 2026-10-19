@@ -1,3 +1,8 @@
+use crate::{
+    app::Message,
+    query::{self, Focus},
+    text_input::Edit,
+};
 use anyhow::{Result, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde::Deserialize;
@@ -10,6 +15,7 @@ pub enum Action {
     Right,
     Refresh,
     Quit,
+    Query,
 }
 
 #[derive(Deserialize)]
@@ -21,6 +27,7 @@ pub struct Keybindings {
     pub right: char,
     pub refresh: char,
     pub quit: char,
+    pub query: char,
 }
 
 impl Default for Keybindings {
@@ -32,12 +39,13 @@ impl Default for Keybindings {
             right: 'l',
             refresh: 'r',
             quit: 'q',
+            query: '/',
         }
     }
 }
 
 impl Keybindings {
-    fn bindings(&self) -> [(char, Action); 6] {
+    fn bindings(&self) -> [(char, Action); 7] {
         [
             (self.up, Action::Up),
             (self.down, Action::Down),
@@ -45,6 +53,7 @@ impl Keybindings {
             (self.right, Action::Right),
             (self.refresh, Action::Refresh),
             (self.quit, Action::Quit),
+            (self.query, Action::Query),
         ]
     }
 
@@ -84,10 +93,55 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} columns  {} refresh  {} quit",
-            self.down, self.up, self.left, self.right, self.refresh, self.quit
+            "{}/{} rows  {}/{} columns  {} query  Tab focus  {} refresh  {} quit",
+            self.down, self.up, self.left, self.right, self.query, self.refresh, self.quit
         )
     }
+}
+
+pub fn message(keys: &Keybindings, focus: Focus, key: KeyEvent) -> Option<Message> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
+        return Some(Message::Action(Action::Quit));
+    }
+    let query_message = match key.code {
+        KeyCode::Tab => Some(query::Message::CycleFocus(false)),
+        KeyCode::BackTab => Some(query::Message::CycleFocus(true)),
+        KeyCode::Esc => Some(query::Message::Cancel),
+        KeyCode::Enter => Some(query::Message::Activate),
+        _ => None,
+    };
+    if let Some(message) = query_message {
+        return Some(Message::Query(message));
+    }
+    if focus == Focus::Input {
+        return edit(key).map(|edit| Message::Query(query::Message::Edit(edit)));
+    }
+    keys.action(key).map(Message::Action)
+}
+
+fn edit(key: KeyEvent) -> Option<Edit> {
+    if key.code == KeyCode::Char('u') && key.modifiers == KeyModifiers::CONTROL {
+        return Some(Edit::Clear);
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+    {
+        return None;
+    }
+    Some(match key.code {
+        KeyCode::Char(c) => Edit::Insert(c.to_string()),
+        KeyCode::Left => Edit::Left,
+        KeyCode::Right => Edit::Right,
+        KeyCode::Home => Edit::Home,
+        KeyCode::End => Edit::End,
+        KeyCode::Backspace => Edit::Backspace,
+        KeyCode::Delete => Edit::Delete,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -131,5 +185,22 @@ mod tests {
             ..Default::default()
         };
         assert!(keys.validate().is_err());
+    }
+
+    #[test]
+    fn typing_in_query_does_not_trigger_navigation_or_quit() {
+        for c in ['h', 'j', 'k', 'l', 'q', 'r', '/'] {
+            assert!(
+                matches!(message(&Keybindings::default(), Focus::Input, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)), Some(Message::Query(query::Message::Edit(Edit::Insert(text)))) if text == c.to_string())
+            );
+        }
+        assert!(matches!(
+            message(
+                &Keybindings::default(),
+                Focus::Input,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ),
+            Some(Message::Action(Action::Quit))
+        ));
     }
 }

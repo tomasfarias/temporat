@@ -35,12 +35,31 @@ impl Column {
 }
 
 pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
-    let [status, body, help] = Layout::vertical([
+    let [status, query, body, help] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(3),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
     .areas(frame.area());
+    let editing = model.query.focus == crate::query::Focus::Input;
+    let inner = query.inner(ratatui::layout::Margin::new(1, 1));
+    let (text, cursor) = model.query.input.visible(inner.width);
+    frame.render_widget(
+        Paragraph::new(text).block(
+            Block::bordered()
+                .title("Query · Enter applies · Esc cancels")
+                .border_style(Style::default().fg(if editing {
+                    Color::Cyan
+                } else {
+                    Color::Reset
+                })),
+        ),
+        query,
+    );
+    if editing && inner.width > 0 && inner.height > 0 {
+        frame.set_cursor_position((inner.x + cursor, inner.y));
+    }
     frame.render_widget(
         Paragraph::new(format!(
             "{} | {}",
@@ -89,7 +108,14 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
             message,
         );
     }
-    frame.render_widget(Paragraph::new(config.keybindings.help()), help);
+    frame.render_widget(
+        Paragraph::new(if editing {
+            "Enter apply  Esc cancel  Ctrl-U clear  Tab focus".into()
+        } else {
+            config.keybindings.help()
+        }),
+        help,
+    );
 }
 
 #[cfg(test)]
@@ -102,7 +128,7 @@ mod tests {
         let mut config = Config::default();
         config.table.columns = vec![Column::Status, Column::WorkflowId];
         let mut model = Model::preview(&config);
-        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 13)).unwrap();
         terminal.draw(|frame| view(frame, &model, &config)).unwrap();
         let text = format!("{:?}", terminal.backend().buffer());
         assert!(text.find("Status").unwrap() < text.find("Workflow ID").unwrap());
@@ -119,8 +145,8 @@ mod tests {
         for (before, after) in before.content.iter().zip(&after.content) {
             assert_eq!(before.symbol(), after.symbol());
         }
-        assert_eq!(before[(1, 3)].bg, Color::Cyan);
-        assert_eq!(after[(1, 3)].bg, Color::DarkGray);
+        assert_eq!(before[(1, 6)].bg, Color::Cyan);
+        assert_eq!(after[(1, 6)].bg, Color::DarkGray);
         assert!(
             after
                 .content
@@ -134,14 +160,14 @@ mod tests {
     fn shrinking_hides_cached_rows_and_growing_reveals_them() {
         let config = Config::default();
         let mut model = Model::preview(&config);
-        for (height, last_visible) in [(8, "Preview 3"), (6, "Preview 1"), (8, "Preview 3")] {
+        for (height, last_visible) in [(11, "Preview 3"), (9, "Preview 1"), (11, "Preview 3")] {
             crate::app::update(&mut model, crate::app::Message::Resize(height));
             let mut terminal = Terminal::new(TestBackend::new(140, height)).unwrap();
             terminal.draw(|frame| view(frame, &model, &config)).unwrap();
             let text = format!("{:?}", terminal.backend().buffer());
             assert!(text.contains(last_visible));
             assert!(!text.contains("Preview 4"));
-            if height == 6 {
+            if height == 9 {
                 assert!(!text.contains("Preview 2"));
             }
             assert_eq!(model.rows.len(), 25);

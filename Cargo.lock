@@ -2541,6 +2541,7 @@ dependencies = [
  "temporalio-common",
  "tokio",
  "toml",
+ "unicode-width",
 ]
 
 [[package]]
