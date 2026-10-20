@@ -10,17 +10,18 @@ use crate::{
     query::{Dialog, Focus, QueryBar},
 };
 
-pub fn controls(area: Rect) -> [Rect; 3] {
+pub fn controls(area: Rect) -> [Rect; 4] {
     Layout::horizontal([
         Constraint::Min(0),
         Constraint::Length(8),
         Constraint::Length(8),
+        Constraint::Length(9),
     ])
     .areas(area)
 }
 
 pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect) {
-    let [input, load, save] = controls(area);
+    let [input, load, save, clear] = controls(area);
     let editing = model.focus == Focus::Input && model.dialog.is_none();
     let inner = input.inner(Margin::new(1, 1));
     let (text, cursor) = model.input.visible(inner.width);
@@ -44,6 +45,10 @@ pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect) {
     frame.render_widget(
         Paragraph::new(" Save ").block(Block::bordered().border_style(focus_style(false))),
         save,
+    );
+    frame.render_widget(
+        Paragraph::new(" Clear ").block(Block::bordered().border_style(focus_style(false))),
+        clear,
     );
     if editing && inner.width > 0 && inner.height > 0 {
         frame.set_cursor_position((inner.x + cursor, inner.y));

@@ -35,6 +35,7 @@ pub enum Command {
 
 pub enum Message {
     Focus(Focus),
+    Clear,
     Edit(Edit),
     Activate,
     Cancel,
@@ -71,6 +72,10 @@ impl QueryBar {
 pub fn update(model: &mut QueryBar, message: Message) -> Option<Command> {
     match message {
         Message::Focus(focus) if model.dialog.is_none() => model.focus = focus,
+        Message::Clear if model.dialog.is_none() => {
+            model.input.update(Edit::Clear);
+            model.focus = Focus::Input;
+        }
         Message::OpenLoad => {
             let selected = model
                 .active_name

@@ -137,6 +137,16 @@ pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Op
     if let Some(message) = query_message {
         return Some(Message::Query(message));
     }
+    if model.focus == Focus::Input
+        && model.dialog.is_none()
+        && key.modifiers == KeyModifiers::CONTROL
+    {
+        match key.code {
+            KeyCode::Char('o') => return Some(Message::Query(query::Message::OpenLoad)),
+            KeyCode::Char('s') => return Some(Message::Query(query::Message::OpenSave)),
+            _ => {}
+        }
+    }
     if model.editing() {
         return edit(key).map(|edit| Message::Query(query::Message::Edit(edit)));
     }
@@ -185,7 +195,7 @@ pub fn mouse(
     if model.dialog.is_some() || event.kind != MouseEventKind::Down(MouseButton::Left) {
         return None;
     }
-    let [input, load, save] = crate::query_view::controls(area);
+    let [input, load, save, clear] = crate::query_view::controls(area);
     let position = (event.column, event.row).into();
     if input.contains(position) {
         Some(Message::Query(query::Message::Focus(Focus::Input)))
@@ -193,6 +203,8 @@ pub fn mouse(
         Some(Message::Query(query::Message::OpenLoad))
     } else if save.contains(position) {
         Some(Message::Query(query::Message::OpenSave))
+    } else if clear.contains(position) {
+        Some(Message::Query(query::Message::Clear))
     } else {
         Some(Message::Query(query::Message::Focus(Focus::Table)))
     }
@@ -286,7 +298,7 @@ mod tests {
     fn buttons_are_clickable_and_modal_input_captures_navigation_keys() {
         let mut model = query::QueryBar::new("", Default::default());
         let area = ratatui::layout::Rect::new(0, 1, 80, 3);
-        let [_, load, save] = crate::query_view::controls(area);
+        let [_, load, save, _] = crate::query_view::controls(area);
         let click = |column| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column,
