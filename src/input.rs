@@ -105,7 +105,7 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} columns  Enter details  {} query  {} load  {} save  {} refresh  {} quit",
+            "{}/{} rows  {}/{} headers  Enter details  {} query  {} load  {} save  {} refresh  {} quit",
             self.down,
             self.up,
             self.left,

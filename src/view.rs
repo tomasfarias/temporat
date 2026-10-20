@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout},
     style::{Color, Style},
-    widgets::{Block, Paragraph, Row, Table, TableState},
+    widgets::{Block, Cell, Paragraph, Row, Table, TableState},
 };
 
 use crate::{
@@ -76,17 +76,21 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
             .map(|column| Constraint::Length(column.width())),
     )
     .header(
-        Row::new(columns.iter().map(|column| column.title()))
-            .style(Style::default().fg(Color::Cyan)),
+        Row::new(columns.iter().enumerate().map(|(index, column)| {
+            let cell = Cell::from(column.title());
+            if index == model.selected_column {
+                cell.style(Style::default().bg(Color::Cyan).fg(Color::Black))
+            } else {
+                cell
+            }
+        }))
+        .style(Style::default().fg(Color::Cyan)),
     )
     .block(Block::bordered().title("Workflows"))
-    .row_highlight_style(Style::default().bg(Color::DarkGray))
-    .column_highlight_style(Style::default().bg(Color::Blue))
-    .cell_highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
+    .row_highlight_style(Style::default().bg(Color::DarkGray));
     // Widget state is local: rendering never changes the application model.
     let mut state = TableState::default()
-        .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset))
-        .with_selected_column(model.selected_column);
+        .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset));
     frame.render_stateful_widget(table, body, &mut state);
     if model.rows.is_empty() {
         let area = body.inner(ratatui::layout::Margin::new(1, 1));
@@ -145,8 +149,15 @@ mod tests {
         for (before, after) in before.content.iter().zip(&after.content) {
             assert_eq!(before.symbol(), after.symbol());
         }
-        assert_eq!(before[(1, 6)].bg, Color::Cyan);
+        assert_eq!(before[(1, 5)].bg, Color::Cyan);
+        assert_eq!(after[(1, 5)].bg, Color::Reset);
+        assert_eq!(before[(1, 6)].bg, Color::DarkGray);
         assert_eq!(after[(1, 6)].bg, Color::DarkGray);
+        for y in 6..before.area.height {
+            for x in 0..before.area.width {
+                assert_eq!(before[(x, y)], after[(x, y)]);
+            }
+        }
         assert!(
             after
                 .content
