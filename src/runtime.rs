@@ -25,16 +25,56 @@ pub async fn run(
     )?;
     let _input_mode = InputMode;
     let mut model = Model::new(&config, offline);
-    app::update(&mut model, Message::Resize(terminal.size()?.height));
+    let size = terminal.size()?;
+    app::update(
+        &mut model,
+        Message::Resize {
+            width: size.width,
+            height: size.height,
+        },
+    );
     let mut effect = app::update(&mut model, Message::Action(Action::Refresh));
     let mut client = None;
     // Dropping JoinSet cancels any pending connection/list request on quit or terminal error.
     let mut tasks = JoinSet::new();
     let mut request: Option<tokio::task::AbortHandle> = None;
+    let mut detail_request: Option<tokio::task::AbortHandle> = None;
     let mut events = EventStream::new();
     while !model.quit {
         if let Some(effect) = effect.take() {
             match effect {
+                Effect::Details(request) => {
+                    if let Some(task) = detail_request.take() {
+                        task.abort();
+                    }
+                    let config = config.clone();
+                    let mut client = client.clone();
+                    detail_request = Some(tasks.spawn(async move {
+                        let result = async {
+                            if client.is_none() {
+                                client = Some(temporal::connect(&config.connection).await?);
+                            }
+                            crate::temporal_details::load(
+                                client.as_ref().expect("connected above"),
+                                &request.execution,
+                            )
+                            .await
+                        }
+                        .await;
+                        Completed::Page(
+                            client,
+                            Message::Details(crate::details::Message::Loaded {
+                                generation: request.generation,
+                                result: result.map_err(|error: anyhow::Error| format!("{error:#}")),
+                            }),
+                        )
+                    }));
+                }
+                Effect::CancelDetails => {
+                    if let Some(task) = detail_request.take() {
+                        task.abort();
+                    }
+                }
                 Effect::LoadPage {
                     token,
                     page_size,
@@ -68,13 +108,14 @@ pub async fn run(
         terminal.draw(|frame| view::view(frame, &model, &config))?;
         let message = tokio::select! {
             event = events.next() => match event.context("terminal event stream closed")?? {
+                Event::Key(key) if model.details.is_some() => input::details_message(&config.keybindings, key),
                 Event::Key(key) => input::message(&config.keybindings, &model.query, key),
-                Event::Mouse(event) => {
+                Event::Mouse(event) if model.details.is_none() => {
                     let size = terminal.size()?;
                     input::mouse(&model.query, event, view::areas(ratatui::layout::Rect::new(0, 0, size.width, size.height))[1])
                 },
-                Event::Paste(text) if model.query.editing() => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
-                Event::Resize(_, height) => Some(Message::Resize(height)),
+                Event::Paste(text) if model.details.is_none() && model.query.editing() => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
+                Event::Resize(width, height) => Some(Message::Resize { width, height }),
                 _ => None,
             },
             result = tasks.join_next(), if !tasks.is_empty() => {

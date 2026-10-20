@@ -1,11 +1,14 @@
 mod app;
 mod config;
+mod details;
+mod details_view;
 mod input;
 mod query;
 mod query_view;
 mod runtime;
 mod saved_queries;
 mod temporal;
+mod temporal_details;
 mod text_input;
 mod view;
 mod workflow;

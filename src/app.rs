@@ -1,5 +1,6 @@
 use crate::{
     config::{Column, Config},
+    details,
     input::Action,
     query::{self, QueryBar},
     workflow::{Page, WorkflowRow},
@@ -16,6 +17,10 @@ pub struct Model {
     pub status: String,
     pub quit: bool,
     pub query: QueryBar,
+    pub details: Option<details::Model>,
+    detail_generation: u64,
+    width: u16,
+    height: u16,
     generation: u64,
     offline: bool,
     loading: Option<LoadKind>,
@@ -26,7 +31,11 @@ pub struct Model {
 
 pub enum Message {
     Action(Action),
-    Resize(u16),
+    Resize {
+        width: u16,
+        height: u16,
+    },
+    Details(details::Message),
     Loaded {
         generation: u64,
         result: Result<Page, String>,
@@ -36,6 +45,8 @@ pub enum Message {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
+    Details(details::Request),
+    CancelDetails,
     SaveQuery {
         name: String,
         query: String,
@@ -86,6 +97,10 @@ impl Model {
             status: "Offline keybinding preview".into(),
             quit: false,
             query: QueryBar::new(config.initial_query(), config.queries.clone()),
+            details: None,
+            detail_generation: 0,
+            width: 80,
+            height: 24,
             generation: 0,
             offline: true,
             loading: None,
@@ -99,12 +114,44 @@ impl Model {
 pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
     let previous_visible_rows = model.visible_rows;
     let scrolling_down = matches!(&message, Message::Action(Action::Down));
-    let resizing = matches!(&message, Message::Resize(_));
+    let resizing = matches!(&message, Message::Resize { .. });
     let received_page = matches!(&message, Message::Loaded { .. });
     match message {
         Message::Action(Action::Quit) => {
             model.quit = true;
             return None;
+        }
+        Message::Action(Action::OpenDetails) => {
+            if let Some(execution) = model
+                .rows
+                .get(model.selected)
+                .and_then(|row| row.execution.clone())
+            {
+                model.detail_generation += 1;
+                let request = details::Request {
+                    generation: model.detail_generation,
+                    execution,
+                };
+                model.details = Some(details::Model::new(
+                    request.clone(),
+                    model.width,
+                    model.height,
+                ));
+                return Some(Effect::Details(request));
+            }
+        }
+        Message::Action(Action::Back) => {}
+        Message::Details(message) => {
+            if let Some(details) = &mut model.details {
+                match details::update(details, message) {
+                    Some(details::Command::Load(request)) => return Some(Effect::Details(request)),
+                    Some(details::Command::Close) => {
+                        model.details = None;
+                        return Some(Effect::CancelDetails);
+                    }
+                    None => {}
+                }
+            }
         }
         Message::Action(Action::Up) => model.selected = model.selected.saturating_sub(1),
         Message::Action(Action::Down) => {
@@ -146,8 +193,13 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
         Message::Action(Action::SaveQuery) => {
             query::update(&mut model.query, query::Message::OpenSave);
         }
-        Message::Resize(height) => {
-            model.visible_rows = usize::from(height.saturating_sub(8)).max(1)
+        Message::Resize { width, height } => {
+            model.width = width;
+            model.height = height;
+            model.visible_rows = usize::from(height.saturating_sub(8)).max(1);
+            if let Some(details) = &mut model.details {
+                details::update(details, details::Message::Resize { width, height });
+            }
         }
         Message::Loaded { generation, result } => {
             if generation != model.generation {
@@ -202,6 +254,7 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
         model.desired_rows = model.row_offset + model.visible_rows;
     }
     if (scrolling_down || (resizing && model.visible_rows > previous_visible_rows) || received_page)
+        && model.details.is_none()
         && model.rows.len() < model.desired_rows
         && !model.next_page_token.is_empty()
     {
@@ -245,7 +298,64 @@ mod tests {
     }
 
     fn resize(rows: u16) -> Message {
-        Message::Resize(rows + 8)
+        Message::Resize {
+            width: 80,
+            height: rows + 8,
+        }
+    }
+
+    #[test]
+    fn details_use_hidden_identity_and_return_to_cached_table_selection() {
+        let mut model = Model::new(&Config::default(), false);
+        let execution = crate::workflow::Execution {
+            workflow_id: "order".into(),
+            run_id: "old-run".into(),
+        };
+        model.rows = vec![
+            WorkflowRow::default(),
+            WorkflowRow {
+                execution: Some(execution.clone()),
+                cells: vec!["Running".into()],
+            },
+        ];
+        model.selected = 1;
+        model.row_offset = 1;
+        model.selected_column = 2;
+        assert_eq!(
+            update(&mut model, Message::Action(Action::OpenDetails)),
+            Some(Effect::Details(details::Request {
+                generation: 1,
+                execution: execution.clone()
+            }))
+        );
+        assert_eq!(
+            update(
+                &mut model,
+                Message::Details(details::Message::Action(Action::Back))
+            ),
+            Some(Effect::CancelDetails)
+        );
+        assert_eq!(
+            (model.selected, model.row_offset, model.selected_column),
+            (1, 1, 2)
+        );
+        assert_eq!(model.rows.len(), 2);
+        update(&mut model, Message::Action(Action::OpenDetails));
+        update(
+            &mut model,
+            Message::Details(details::Message::Loaded {
+                generation: 1,
+                result: Err("old request".into()),
+            }),
+        );
+        assert!(
+            !model
+                .details
+                .as_ref()
+                .unwrap()
+                .status
+                .contains("old request")
+        );
     }
 
     #[test]
@@ -270,7 +380,13 @@ mod tests {
     fn empty_table_and_tiny_terminal_are_navigable() {
         let mut model = Model::preview(&Config::default());
         model.rows.clear();
-        update(&mut model, Message::Resize(0));
+        update(
+            &mut model,
+            Message::Resize {
+                width: 0,
+                height: 0,
+            },
+        );
         update(&mut model, Message::Action(Action::Down));
         assert_eq!(model.selected, 0);
         assert_eq!(update(&mut model, Message::Action(Action::Refresh)), None);
@@ -402,7 +518,16 @@ mod tests {
         );
         assert_eq!(update(&mut model, page(&["a", "b"], &[1])), load(&[1], 2));
         assert_eq!(update(&mut model, page(&["c"], &[])), None);
-        assert_eq!(update(&mut model, Message::Resize(100)), None);
+        assert_eq!(
+            update(
+                &mut model,
+                Message::Resize {
+                    width: 80,
+                    height: 100
+                }
+            ),
+            None
+        );
     }
 
     #[test]

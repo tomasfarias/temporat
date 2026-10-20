@@ -20,6 +20,8 @@ pub enum Action {
     Query,
     LoadQuery,
     SaveQuery,
+    OpenDetails,
+    Back,
 }
 
 #[derive(Deserialize)]
@@ -103,7 +105,7 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} columns  {} query  {} load  {} save  Tab focus  {} refresh  {} quit",
+            "{}/{} rows  {}/{} columns  Enter details  {} query  {} load  {} save  Tab focus  {} refresh  {} quit",
             self.down,
             self.up,
             self.left,
@@ -123,6 +125,9 @@ pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Op
     }
     if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
         return Some(Message::Action(Action::Quit));
+    }
+    if key.code == KeyCode::Enter && model.focus == Focus::Table && model.dialog.is_none() {
+        return Some(Message::Action(Action::OpenDetails));
     }
     let query_message = match key.code {
         KeyCode::Tab => Some(query::Message::CycleFocus(false)),
@@ -151,6 +156,24 @@ pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Op
         keys.action(key).map(Message::Action)
     } else {
         None
+    }
+}
+
+pub fn details_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    let action = match key.code {
+        KeyCode::Esc => Some(Action::Back),
+        KeyCode::Enter => Some(Action::OpenDetails),
+        KeyCode::Up => Some(Action::Up),
+        KeyCode::Down => Some(Action::Down),
+        _ => keys.action(key),
+    }?;
+    if action == Action::Quit {
+        Some(Message::Action(action))
+    } else {
+        Some(Message::Details(crate::details::Message::Action(action)))
     }
 }
 

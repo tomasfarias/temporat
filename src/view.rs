@@ -45,6 +45,10 @@ pub fn areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 4] {
 }
 
 pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
+    if let Some(details) = &model.details {
+        crate::details_view::view(frame, details, &config.keybindings);
+        return;
+    }
     let [status, query, body, help] = areas(frame.area());
     let editing = model.query.focus == crate::query::Focus::Input;
     crate::query_view::bar(frame, &model.query, query);
@@ -150,7 +154,10 @@ mod tests {
         let config = Config::default();
         let mut model = Model::preview(&config);
         for (height, last_visible) in [(11, "Preview 3"), (9, "Preview 1"), (11, "Preview 3")] {
-            crate::app::update(&mut model, crate::app::Message::Resize(height));
+            crate::app::update(
+                &mut model,
+                crate::app::Message::Resize { width: 140, height },
+            );
             let mut terminal = Terminal::new(TestBackend::new(140, height)).unwrap();
             terminal.draw(|frame| view(frame, &model, &config)).unwrap();
             let text = format!("{:?}", terminal.backend().buffer());
@@ -172,7 +179,7 @@ mod tests {
         terminal.draw(|frame| view(frame, &model, &config)).unwrap();
         assert!(format!("{:?}", terminal.backend().buffer()).contains("No workflows found."));
         for (width, height) in [(0, 0), (1, 1), (5, 3)] {
-            crate::app::update(&mut model, crate::app::Message::Resize(height));
+            crate::app::update(&mut model, crate::app::Message::Resize { width, height });
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| view(frame, &model, &config)).unwrap();
         }
