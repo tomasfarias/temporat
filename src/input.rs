@@ -187,6 +187,29 @@ pub fn details_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
     }
 }
 
+pub fn error_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
+    use crate::error_popup::Message as Error;
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    let message = match key.code {
+        KeyCode::Enter | KeyCode::Esc => Error::Close,
+        KeyCode::Up => Error::Scroll(-1),
+        KeyCode::Down => Error::Scroll(1),
+        KeyCode::PageUp => Error::Page(-1),
+        KeyCode::PageDown => Error::Page(1),
+        KeyCode::Home => Error::Scroll(isize::MIN),
+        KeyCode::End => Error::Scroll(isize::MAX),
+        _ => match keys.action(key) {
+            Some(Action::Quit) => return Some(Message::Action(Action::Quit)),
+            Some(Action::Up) => Error::Scroll(-1),
+            Some(Action::Down) => Error::Scroll(1),
+            _ => return None,
+        },
+    };
+    Some(Message::Error(message))
+}
+
 pub fn mouse(
     model: &query::QueryBar,
     event: MouseEvent,

@@ -20,7 +20,7 @@ pub fn controls(area: Rect) -> [Rect; 4] {
     .areas(area)
 }
 
-pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect) {
+pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect, show_cursor: bool) {
     let [input, load, save, clear] = controls(area);
     let editing = model.focus == Focus::Input && model.dialog.is_none();
     let inner = input.inner(Margin::new(1, 1));
@@ -50,7 +50,7 @@ pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect) {
         Paragraph::new(" Clear ").block(Block::bordered().border_style(focus_style(false))),
         clear,
     );
-    if editing && inner.width > 0 && inner.height > 0 {
+    if show_cursor && editing && inner.width > 0 && inner.height > 0 {
         frame.set_cursor_position((inner.x + cursor, inner.y));
     }
 }

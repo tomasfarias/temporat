@@ -123,13 +123,19 @@ pub async fn run(
         terminal.draw(|frame| view::view(frame, &model, &config))?;
         let message = tokio::select! {
             event = events.next() => match event.context("terminal event stream closed")?? {
+                Event::Key(key) if model.error.is_some() => input::error_message(&config.keybindings, key),
                 Event::Key(key) if model.details.is_some() => input::details_message(&config.keybindings, key),
                 Event::Key(key) => input::message(&config.keybindings, &model.query, key),
+                Event::Mouse(event) if model.error.is_some() => match event.kind {
+                    crossterm::event::MouseEventKind::ScrollUp => Some(Message::Error(crate::error_popup::Message::Scroll(-3))),
+                    crossterm::event::MouseEventKind::ScrollDown => Some(Message::Error(crate::error_popup::Message::Scroll(3))),
+                    _ => None,
+                },
                 Event::Mouse(event) if model.details.is_none() => {
                     let size = terminal.size()?;
                     input::mouse(&model.query, event, view::areas(ratatui::layout::Rect::new(0, 0, size.width, size.height))[1])
                 },
-                Event::Paste(text) if model.details.is_none() && model.query.editing() => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
+                Event::Paste(text) if model.error.is_none() && model.details.is_none() && model.query.editing() => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
                 Event::Resize(width, height) => Some(Message::Resize { width, height }),
                 _ => None,
             },

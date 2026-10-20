@@ -47,11 +47,14 @@ pub fn areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 4] {
 pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     if let Some(details) = &model.details {
         crate::details_view::view(frame, details, &config.keybindings);
+        if let Some(error) = &model.error {
+            crate::error_popup::view(frame, error, &config.keybindings);
+        }
         return;
     }
     let [status, query, body, help] = areas(frame.area());
     let editing = model.query.focus == crate::query::Focus::Input;
-    crate::query_view::bar(frame, &model.query, query);
+    crate::query_view::bar(frame, &model.query, query, model.error.is_none());
     frame.render_widget(
         Paragraph::new(format!(
             "{} | {}",
@@ -108,7 +111,11 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         }),
         help,
     );
-    crate::query_view::modal(frame, &model.query, &config.keybindings);
+    if let Some(error) = &model.error {
+        crate::error_popup::view(frame, error, &config.keybindings);
+    } else {
+        crate::query_view::modal(frame, &model.query, &config.keybindings);
+    }
 }
 
 #[cfg(test)]

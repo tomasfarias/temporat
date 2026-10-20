@@ -1,6 +1,6 @@
 use crate::{
     config::{Column, Config},
-    details,
+    details, error_popup,
     input::Action,
     query::{self, QueryBar},
     workflow::{Page, WorkflowRow},
@@ -18,6 +18,7 @@ pub struct Model {
     pub quit: bool,
     pub query: QueryBar,
     pub details: Option<details::Model>,
+    pub error: Option<error_popup::Popup>,
     detail_generation: u64,
     width: u16,
     height: u16,
@@ -37,6 +38,7 @@ pub enum Message {
         height: u16,
     },
     Details(details::Message),
+    Error(error_popup::Message),
     Loaded {
         generation: u64,
         result: Result<Page, String>,
@@ -99,6 +101,7 @@ impl Model {
             quit: false,
             query: QueryBar::new(config.initial_query(), config.queries.clone()),
             details: None,
+            error: None,
             detail_generation: 0,
             width: 80,
             height: 24,
@@ -120,6 +123,19 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
     let resizing = matches!(&message, Message::Resize { .. });
     let received_page = matches!(&message, Message::Loaded { .. });
     match message {
+        Message::Error(error_popup::Message::Close) => {
+            model.error = None;
+            return None;
+        }
+        Message::Error(message) => {
+            if let Some(error) = &mut model.error {
+                error.scroll(
+                    message,
+                    ratatui::layout::Rect::new(0, 0, model.width, model.height),
+                );
+            }
+            return None;
+        }
         Message::Action(Action::Quit) => {
             model.quit = true;
             return None;
@@ -208,6 +224,12 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             model.width = width;
             model.height = height;
             model.visible_rows = usize::from(height.saturating_sub(8)).max(1);
+            if let Some(error) = &mut model.error {
+                error.scroll(
+                    error_popup::Message::Scroll(0),
+                    ratatui::layout::Rect::new(0, 0, width, height),
+                );
+            }
             if let Some(details) = &mut model.details
                 && let Some(details::Command::Load(request)) =
                     details::update(details, details::Message::Resize { width, height })
@@ -228,6 +250,7 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                         && page.next_page_token == model.next_page_token
                     {
                         model.status = "Error: workflow pagination made no progress".into();
+                        model.error = Some(error_popup::Popup::new(model.status.clone()));
                         return None;
                     }
                     match kind {
@@ -253,10 +276,17 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                     model.status = format!("{} workflows{more}", model.rows.len());
                 }
                 Err(error) => {
-                    if model.pending_query.take().is_some() && model.query.dialog.is_none() {
+                    let query_failed = model.pending_query.take().is_some();
+                    if query_failed && model.query.dialog.is_none() {
                         model.query.focus = query::Focus::Input;
                     }
                     model.status = format!("Error: {error}");
+                    let context = if query_failed {
+                        "Could not apply query. Previous workflows are still shown.\nClose this message to edit the query."
+                    } else {
+                        "Could not load workflows. Cached results are still available."
+                    };
+                    model.error = Some(error_popup::Popup::new(format!("{context}\n\n{error}")));
                     return None;
                 }
             }
@@ -275,6 +305,7 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
     }
     if (scrolling_down || (resizing && model.visible_rows > previous_visible_rows) || received_page)
         && model.details.is_none()
+        && model.error.is_none()
         && model.rows.len() < model.desired_rows
         && !model.next_page_token.is_empty()
     {
@@ -523,6 +554,7 @@ mod tests {
         );
         assert_eq!(model.rows[0].cells, ["first"]);
         assert!(model.status.contains("unavailable"));
+        update(&mut model, Message::Error(error_popup::Message::Close));
         assert_eq!(
             update(&mut model, Message::Action(Action::Down)),
             load(&[42], 1)
@@ -702,6 +734,15 @@ mod tests {
         assert_eq!(model.query.applied, "ExecutionStatus = 'Running'");
         assert_eq!(model.query.input.text, "invalid query");
         assert_eq!(model.query.focus, query::Focus::Input);
+        assert!(
+            model
+                .error
+                .as_ref()
+                .unwrap()
+                .text
+                .contains("invalid syntax")
+        );
+        update(&mut model, Message::Error(error_popup::Message::Close));
         update(&mut model, Message::Query(query::Message::Cancel));
         assert!(
             matches!(update(&mut model, Message::Action(Action::Down)), Some(Effect::LoadPage { query, token, .. }) if query == "ExecutionStatus = 'Running'" && token == [42])
