@@ -22,6 +22,7 @@ pub struct Model {
     width: u16,
     height: u16,
     generation: u64,
+    pending_query: Option<String>,
     offline: bool,
     loading: Option<LoadKind>,
     next_page_token: Vec<u8>,
@@ -102,6 +103,7 @@ impl Model {
             width: 80,
             height: 24,
             generation: 0,
+            pending_query: None,
             offline: true,
             loading: None,
             next_page_token: Vec::new(),
@@ -177,19 +179,20 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             query::update(&mut model.query, query::Message::Focus(query::Focus::Input));
         }
         Message::Query(message) => {
+            let previous_query = model.query.applied.clone();
             match query::update(&mut model.query, message) {
                 Some(query::Command::Save { name, query }) => {
                     return Some(Effect::SaveQuery { name, query });
                 }
                 Some(query::Command::Apply) => {
-                    // A new query invalidates both cached rows and in-flight page responses.
+                    // Invalidate in-flight responses, but keep the current result set until
+                    // the replacement succeeds. Its pagination token belongs to applied.
                     model.generation += 1;
                     model.loading = None;
-                    model.rows.clear();
-                    model.next_page_token.clear();
-                    model.selected = 0;
-                    model.row_offset = 0;
-                    model.desired_rows = model.visible_rows;
+                    if !model.offline {
+                        model.pending_query =
+                            Some(std::mem::replace(&mut model.query.applied, previous_query));
+                    }
                     return begin_load(model, LoadKind::Replace);
                 }
                 None => {}
@@ -229,6 +232,9 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                     }
                     match kind {
                         LoadKind::Replace => {
+                            if let Some(query) = model.pending_query.take() {
+                                model.query.applied = query;
+                            }
                             model.rows = page.rows;
                             model.selected = 0;
                             model.row_offset = 0;
@@ -247,6 +253,9 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                     model.status = format!("{} workflows{more}", model.rows.len());
                 }
                 Err(error) => {
+                    if model.pending_query.take().is_some() && model.query.dialog.is_none() {
+                        model.query.focus = query::Focus::Input;
+                    }
                     model.status = format!("Error: {error}");
                     return None;
                 }
@@ -283,11 +292,16 @@ fn begin_load(model: &mut Model, kind: LoadKind) -> Option<Effect> {
         LoadKind::Replace => Vec::new(),
         LoadKind::Append => model.next_page_token.clone(),
     };
+    let query = match kind {
+        LoadKind::Replace => model.pending_query.as_ref().unwrap_or(&model.query.applied),
+        LoadKind::Append => &model.query.applied,
+    }
+    .clone();
     model.loading = Some(kind);
     model.status = "Loading workflows…".into();
     Some(Effect::LoadPage {
         token,
-        query: model.query.applied.clone(),
+        query,
         generation: model.generation,
         page_size: model
             .page_size
@@ -639,5 +653,88 @@ mod tests {
                 generation: 1
             })
         );
+    }
+
+    #[test]
+    fn failed_query_retains_cached_rows_selection_and_original_pagination_filter() {
+        let mut config = Config::default();
+        config
+            .queries
+            .insert("Running".into(), "ExecutionStatus = 'Running'".into());
+        config.table.default_query = Some("Running".into());
+        let mut model = Model::new(&config, false);
+        update(&mut model, resize(2));
+        update(&mut model, Message::Action(Action::Refresh));
+        update(&mut model, page(&["a", "b", "c"], &[42]));
+        update(&mut model, Message::Action(Action::Down));
+        update(&mut model, Message::Action(Action::Down));
+        update(&mut model, Message::Action(Action::Right));
+        let selection = (model.selected, model.row_offset, model.selected_column);
+        update(&mut model, Message::Action(Action::Query));
+        update(
+            &mut model,
+            Message::Query(query::Message::Edit(crate::text_input::Edit::Clear)),
+        );
+        update(
+            &mut model,
+            Message::Query(query::Message::Edit(crate::text_input::Edit::Insert(
+                "invalid query".into(),
+            ))),
+        );
+        assert!(
+            matches!(update(&mut model, Message::Query(query::Message::Activate)), Some(Effect::LoadPage { query, token, generation: 1, .. }) if query == "invalid query" && token.is_empty())
+        );
+        assert_eq!(model.rows.len(), 3);
+        // An old prefetch must not replace or append to the preserved rows.
+        update(&mut model, page(&["stale"], &[9]));
+        update(
+            &mut model,
+            Message::Loaded {
+                generation: 1,
+                result: Err("invalid syntax".into()),
+            },
+        );
+        assert_eq!(model.rows.len(), 3);
+        assert_eq!(
+            (model.selected, model.row_offset, model.selected_column),
+            selection
+        );
+        assert_eq!(model.query.applied, "ExecutionStatus = 'Running'");
+        assert_eq!(model.query.input.text, "invalid query");
+        assert_eq!(model.query.focus, query::Focus::Input);
+        update(&mut model, Message::Query(query::Message::Cancel));
+        assert!(
+            matches!(update(&mut model, Message::Action(Action::Down)), Some(Effect::LoadPage { query, token, .. }) if query == "ExecutionStatus = 'Running'" && token == [42])
+        );
+    }
+
+    #[test]
+    fn successful_query_replaces_old_results_even_when_empty() {
+        let mut model = Model::new(&Config::default(), false);
+        update(&mut model, Message::Action(Action::Refresh));
+        update(&mut model, page(&["old"], &[42]));
+        update(&mut model, Message::Action(Action::Query));
+        update(
+            &mut model,
+            Message::Query(query::Message::Edit(crate::text_input::Edit::Insert(
+                "WorkflowId = 'missing'".into(),
+            ))),
+        );
+        update(&mut model, Message::Query(query::Message::Activate));
+        assert_eq!(model.rows.len(), 1);
+        assert_eq!(model.query.applied, "");
+        update(
+            &mut model,
+            Message::Loaded {
+                generation: 1,
+                result: Ok(Page {
+                    rows: vec![],
+                    next_page_token: vec![],
+                }),
+            },
+        );
+        assert!(model.rows.is_empty());
+        assert!(model.next_page_token.is_empty());
+        assert_eq!(model.query.applied, "WorkflowId = 'missing'");
     }
 }
