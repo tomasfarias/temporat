@@ -6,8 +6,37 @@ use temporalio_common::protos::temporal::api::{
 use crate::config::Column;
 
 pub struct Page {
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<WorkflowRow>,
     pub next_page_token: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Execution {
+    pub workflow_id: String,
+    pub run_id: String,
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct WorkflowRow {
+    pub execution: Option<Execution>,
+    pub cells: Vec<String>,
+}
+
+impl WorkflowRow {
+    pub fn from_info(info: WorkflowExecutionInfo, columns: &[Column]) -> Self {
+        let execution = info
+            .execution
+            .as_ref()
+            .filter(|execution| !execution.workflow_id.is_empty() && !execution.run_id.is_empty())
+            .map(|execution| Execution {
+                workflow_id: execution.workflow_id.clone(),
+                run_id: execution.run_id.clone(),
+            });
+        Self {
+            execution,
+            cells: cells(info, columns),
+        }
+    }
 }
 
 // Keep SDK types at the boundary. The UI receives only the requested display cells.
@@ -109,5 +138,32 @@ mod tests {
         assert_eq!(timestamp(i64::MAX, 0), "—");
         assert_eq!(timestamp(0, -1), "—");
         assert_eq!(timestamp(0, 1_000_000_000), "—");
+    }
+
+    #[test]
+    fn retains_exact_run_identity_when_id_columns_are_hidden() {
+        let row = WorkflowRow::from_info(
+            WorkflowExecutionInfo {
+                execution: Some(WorkflowExecution {
+                    workflow_id: "order".into(),
+                    run_id: "older-run".into(),
+                }),
+                ..Default::default()
+            },
+            &[Column::Status],
+        );
+        assert_eq!(row.cells.len(), 1);
+        assert_eq!(
+            row.execution.unwrap(),
+            Execution {
+                workflow_id: "order".into(),
+                run_id: "older-run".into()
+            }
+        );
+        assert!(
+            WorkflowRow::from_info(WorkflowExecutionInfo::default(), &[])
+                .execution
+                .is_none()
+        );
     }
 }

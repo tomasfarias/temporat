@@ -2,13 +2,13 @@ use crate::{
     config::{Column, Config},
     input::Action,
     query::{self, QueryBar},
-    workflow::Page,
+    workflow::{Page, WorkflowRow},
 };
 
 // Elm: only update changes the model; view reads it; the runtime executes effects.
 pub struct Model {
     pub columns: Vec<Column>,
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<WorkflowRow>,
     pub selected: usize,
     pub row_offset: usize,
     pub selected_column: usize,
@@ -69,13 +69,14 @@ impl Model {
         Self {
             columns: config.table.columns.clone(),
             rows: (1..=25)
-                .map(|index| {
-                    config
+                .map(|index| WorkflowRow {
+                    cells: config
                         .table
                         .columns
                         .iter()
                         .map(|_| format!("Preview {index}"))
-                        .collect()
+                        .collect(),
+                    ..Default::default()
                 })
                 .collect(),
             selected: 0,
@@ -279,7 +280,13 @@ mod tests {
         Message::Loaded {
             generation: 0,
             result: Ok(Page {
-                rows: names.iter().map(|name| vec![(*name).into()]).collect(),
+                rows: names
+                    .iter()
+                    .map(|name| WorkflowRow {
+                        cells: vec![(*name).into()],
+                        ..Default::default()
+                    })
+                    .collect(),
                 next_page_token: token.to_vec(),
             }),
         }
@@ -329,7 +336,7 @@ mod tests {
                 result: Err("unavailable".into()),
             },
         );
-        assert_eq!(model.rows, [vec!["first"]]);
+        assert_eq!(model.rows[0].cells, ["first"]);
         assert!(model.status.contains("unavailable"));
         assert_eq!(
             update(&mut model, Message::Action(Action::Down)),
@@ -435,7 +442,10 @@ mod tests {
             Message::Loaded {
                 generation: 1,
                 result: Ok(Page {
-                    rows: vec![vec!["new".into()]],
+                    rows: vec![WorkflowRow {
+                        cells: vec!["new".into()],
+                        ..Default::default()
+                    }],
                     next_page_token: vec![3],
                 }),
             },

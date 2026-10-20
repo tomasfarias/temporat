@@ -61,7 +61,7 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         .iter()
         .skip(model.row_offset)
         .take(model.visible_rows)
-        .map(|row| Row::new(row.iter().map(String::as_str)));
+        .map(|row| Row::new(row.cells.iter().map(String::as_str)));
     let table = Table::new(
         rows,
         columns

@@ -39,7 +39,7 @@ pub async fn list_page(
         rows: response
             .executions
             .into_iter()
-            .map(|info| workflow::cells(info, columns))
+            .map(|info| workflow::WorkflowRow::from_info(info, columns))
             .collect(),
         next_page_token: response.next_page_token,
     })
