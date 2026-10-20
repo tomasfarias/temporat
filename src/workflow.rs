@@ -80,7 +80,7 @@ fn missing() -> String {
     "—".into()
 }
 
-fn timestamp(seconds: i64, nanos: i32) -> String {
+pub fn timestamp(seconds: i64, nanos: i32) -> String {
     u32::try_from(nanos)
         .ok()
         .filter(|nanos| *nanos < 1_000_000_000)

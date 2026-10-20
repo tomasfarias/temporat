@@ -67,7 +67,11 @@ pub async fn run(
                                         &request.execution,
                                     )
                                     .await
-                                    .map(crate::details::Content::InputResult)
+                                        .map(crate::details::Content::InputResult)
+                                }
+                                crate::details::Kind::History { token } => {
+                                    let (events, next_page_token) = crate::temporal_details::history_page(client, &request.execution, token, temporalio_common::protos::temporal::api::enums::v1::HistoryEventFilterType::AllEvent).await?;
+                                    Ok(crate::details::Content::History(crate::history::Page { events: events.into_iter().map(crate::history::Event::from_proto).collect(), next_page_token }))
                                 }
                             }
                         }
@@ -140,6 +144,11 @@ pub async fn run(
         };
         if let Some(message) = message {
             effect = app::update(&mut model, message);
+            if model.details.is_none()
+                && let Some(task) = detail_request.take()
+            {
+                task.abort();
+            }
         }
     }
     Ok(())

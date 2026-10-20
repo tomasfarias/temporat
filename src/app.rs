@@ -112,6 +112,7 @@ impl Model {
 }
 
 pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
+    let mut detail_effect = None;
     let previous_visible_rows = model.visible_rows;
     let scrolling_down = matches!(&message, Message::Action(Action::Down));
     let resizing = matches!(&message, Message::Resize { .. });
@@ -148,6 +149,12 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                     Some(details::Command::Load(request)) => return Some(Effect::Details(request)),
                     Some(details::Command::Close) => {
                         model.details = None;
+                        if model.rows.len() < model.desired_rows
+                            && !model.next_page_token.is_empty()
+                            && let Some(effect) = begin_load(model, LoadKind::Append)
+                        {
+                            return Some(effect);
+                        }
                         return Some(Effect::CancelDetails);
                     }
                     None => {}
@@ -198,8 +205,11 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             model.width = width;
             model.height = height;
             model.visible_rows = usize::from(height.saturating_sub(8)).max(1);
-            if let Some(details) = &mut model.details {
-                details::update(details, details::Message::Resize { width, height });
+            if let Some(details) = &mut model.details
+                && let Some(details::Command::Load(request)) =
+                    details::update(details, details::Message::Resize { width, height })
+            {
+                detail_effect = Some(Effect::Details(request));
             }
         }
         Message::Loaded { generation, result } => {
@@ -261,7 +271,7 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
     {
         return begin_load(model, LoadKind::Append);
     }
-    None
+    detail_effect
 }
 
 fn begin_load(model: &mut Model, kind: LoadKind) -> Option<Effect> {
@@ -358,6 +368,49 @@ mod tests {
                 .status
                 .contains("old request")
         );
+    }
+
+    #[test]
+    fn resizing_details_executes_history_prefetch_and_refills_table_on_return() {
+        let mut model = Model::new(&Config::default(), false);
+        update(&mut model, resize(1));
+        update(&mut model, Message::Action(Action::Refresh));
+        update(&mut model, page(&["row"], &[9]));
+        let request = details::Request {
+            generation: 1,
+            execution: crate::workflow::Execution {
+                workflow_id: "id".into(),
+                run_id: "run".into(),
+            },
+            kind: details::Kind::History { token: vec![] },
+        };
+        let mut detail = details::Model::new(request, 80, 6);
+        detail.tab = details::Tab::History;
+        details::update(
+            &mut detail,
+            details::Message::Loaded {
+                generation: 1,
+                result: Ok(details::Content::History(crate::history::Page {
+                    events: (1..=4)
+                        .map(|id| crate::history::Event {
+                            id,
+                            time: "".into(),
+                            kind: "Test".into(),
+                            details: "".into(),
+                        })
+                        .collect(),
+                    next_page_token: vec![42],
+                })),
+            },
+        );
+        model.details = Some(detail);
+        assert!(
+            matches!(update(&mut model, Message::Resize { width: 80, height: 20 }), Some(Effect::Details(details::Request { kind: details::Kind::History { token }, .. })) if token == [42])
+        );
+        assert!(
+            matches!(update(&mut model, Message::Details(details::Message::Action(Action::Back))), Some(Effect::LoadPage { token, .. }) if token == [9])
+        );
+        assert_eq!(model.rows.len(), 1);
     }
 
     #[test]

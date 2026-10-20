@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod details;
 mod details_view;
+mod history;
 mod input;
 mod payload;
 mod query;

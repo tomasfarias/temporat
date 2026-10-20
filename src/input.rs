@@ -168,6 +168,8 @@ pub fn details_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
         KeyCode::Enter => Some(Action::OpenDetails),
         KeyCode::Up => Some(Action::Up),
         KeyCode::Down => Some(Action::Down),
+        KeyCode::Left | KeyCode::BackTab => Some(Action::Left),
+        KeyCode::Right | KeyCode::Tab => Some(Action::Right),
         _ => keys.action(key),
     }?;
     if action == Action::Quit {
