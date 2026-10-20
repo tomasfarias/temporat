@@ -105,7 +105,7 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} columns  Enter details  {} query  {} load  {} save  Tab focus  {} refresh  {} quit",
+            "{}/{} rows  {}/{} columns  Enter details  {} query  {} load  {} save  {} refresh  {} quit",
             self.down,
             self.up,
             self.left,
@@ -130,8 +130,6 @@ pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Op
         return Some(Message::Action(Action::OpenDetails));
     }
     let query_message = match key.code {
-        KeyCode::Tab => Some(query::Message::CycleFocus(false)),
-        KeyCode::BackTab => Some(query::Message::CycleFocus(true)),
         KeyCode::Esc => Some(query::Message::Cancel),
         KeyCode::Enter => Some(query::Message::Activate),
         _ => None,
@@ -168,8 +166,8 @@ pub fn details_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
         KeyCode::Enter => Some(Action::OpenDetails),
         KeyCode::Up => Some(Action::Up),
         KeyCode::Down => Some(Action::Down),
-        KeyCode::Left | KeyCode::BackTab => Some(Action::Left),
-        KeyCode::Right | KeyCode::Tab => Some(Action::Right),
+        KeyCode::Left => Some(Action::Left),
+        KeyCode::Right => Some(Action::Right),
         _ => keys.action(key),
     }?;
     if action == Action::Quit {

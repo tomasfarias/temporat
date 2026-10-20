@@ -102,7 +102,7 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     }
     frame.render_widget(
         Paragraph::new(if editing {
-            "Enter apply  Esc cancel  Ctrl-U clear  Tab focus".into()
+            "Enter apply  Esc cancel  Ctrl-U clear".into()
         } else {
             config.keybindings.help()
         }),

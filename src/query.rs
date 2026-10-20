@@ -5,8 +5,6 @@ use std::collections::BTreeMap;
 pub enum Focus {
     Table,
     Input,
-    Load,
-    Save,
 }
 
 pub struct QueryBar {
@@ -37,7 +35,6 @@ pub enum Command {
 
 pub enum Message {
     Focus(Focus),
-    CycleFocus(bool),
     Edit(Edit),
     Activate,
     Cancel,
@@ -74,15 +71,6 @@ impl QueryBar {
 pub fn update(model: &mut QueryBar, message: Message) -> Option<Command> {
     match message {
         Message::Focus(focus) if model.dialog.is_none() => model.focus = focus,
-        Message::CycleFocus(backwards) if model.dialog.is_none() => {
-            let order = [Focus::Table, Focus::Input, Focus::Load, Focus::Save];
-            let index = order
-                .iter()
-                .position(|focus| *focus == model.focus)
-                .unwrap();
-            model.focus =
-                order[(index + if backwards { order.len() - 1 } else { 1 }) % order.len()];
-        }
         Message::OpenLoad => {
             let selected = model
                 .active_name
@@ -171,8 +159,6 @@ pub fn update(model: &mut QueryBar, message: Message) -> Option<Command> {
             model.focus = Focus::Table;
             return Some(Command::Apply);
         }
-        Message::Activate if model.focus == Focus::Load => return update(model, Message::OpenLoad),
-        Message::Activate if model.focus == Focus::Save => return update(model, Message::OpenSave),
         Message::Cancel if matches!(model.dialog, Some(Dialog::Save { saving: true, .. })) => {}
         Message::Cancel if model.dialog.is_some() => model.dialog = None,
         Message::Cancel => {
@@ -269,18 +255,5 @@ mod tests {
         assert_eq!(model.saved["Named query"], model.input.text);
         assert_eq!(model.applied, "original");
         assert!(model.dialog.is_none());
-    }
-
-    #[test]
-    fn focus_cycles_through_input_and_both_buttons() {
-        let mut model = QueryBar::new("", BTreeMap::new());
-        for focus in [Focus::Input, Focus::Load, Focus::Save, Focus::Table] {
-            update(&mut model, Message::CycleFocus(false));
-            assert_eq!(model.focus, focus);
-        }
-        update(&mut model, Message::CycleFocus(true));
-        assert_eq!(model.focus, Focus::Save);
-        update(&mut model, Message::Activate);
-        assert!(matches!(model.dialog, Some(Dialog::Save { .. })));
     }
 }

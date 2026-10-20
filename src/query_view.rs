@@ -38,13 +38,11 @@ pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect) {
         input,
     );
     frame.render_widget(
-        Paragraph::new(" Load ")
-            .block(Block::bordered().border_style(focus_style(model.focus == Focus::Load))),
+        Paragraph::new(" Load ").block(Block::bordered().border_style(focus_style(false))),
         load,
     );
     frame.render_widget(
-        Paragraph::new(" Save ")
-            .block(Block::bordered().border_style(focus_style(model.focus == Focus::Save))),
+        Paragraph::new(" Save ").block(Block::bordered().border_style(focus_style(false))),
         save,
     );
     if editing && inner.width > 0 && inner.height > 0 {
