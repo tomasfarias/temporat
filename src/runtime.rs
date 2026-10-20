@@ -54,11 +54,22 @@ pub async fn run(
                             if client.is_none() {
                                 client = Some(temporal::connect(&config.connection).await?);
                             }
-                            crate::temporal_details::load(
-                                client.as_ref().expect("connected above"),
-                                &request.execution,
-                            )
-                            .await
+                            let client = client.as_ref().expect("connected above");
+                            match request.kind {
+                                crate::details::Kind::Overview => {
+                                    crate::temporal_details::load(client, &request.execution)
+                                        .await
+                                        .map(crate::details::Content::Overview)
+                                }
+                                crate::details::Kind::InputResult => {
+                                    crate::temporal_details::input_result(
+                                        client,
+                                        &request.execution,
+                                    )
+                                    .await
+                                    .map(crate::details::Content::InputResult)
+                                }
+                            }
                         }
                         .await;
                         Completed::Page(

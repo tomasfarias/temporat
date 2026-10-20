@@ -131,6 +131,7 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                 let request = details::Request {
                     generation: model.detail_generation,
                     execution,
+                    kind: details::Kind::Overview,
                 };
                 model.details = Some(details::Model::new(
                     request.clone(),
@@ -325,7 +326,8 @@ mod tests {
             update(&mut model, Message::Action(Action::OpenDetails)),
             Some(Effect::Details(details::Request {
                 generation: 1,
-                execution: execution.clone()
+                execution: execution.clone(),
+                kind: details::Kind::Overview
             }))
         );
         assert_eq!(

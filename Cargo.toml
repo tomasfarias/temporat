@@ -7,14 +7,17 @@ description = "A Temporal workflow TUI"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = "0.3"
 ratatui = "0.30.2"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prost = "0.14"
 temporalio-client = { version = "1.1", default-features = false, features = ["tls-ring"] }
-temporalio-common = "1.1"
+temporalio-common = { version = "1.1", features = ["serde_serialize"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 toml = "1"
 toml_edit = "0.25"

@@ -3,6 +3,7 @@ mod config;
 mod details;
 mod details_view;
 mod input;
+mod payload;
 mod query;
 mod query_view;
 mod runtime;

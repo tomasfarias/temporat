@@ -4,15 +4,35 @@ pub struct Snapshot {
     pub overview: String,
 }
 
+pub enum Content {
+    Overview(Snapshot),
+    InputResult(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Overview,
+    InputResult,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Overview,
+    InputResult,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     pub generation: u64,
     pub execution: Execution,
+    pub kind: Kind,
 }
 
 pub struct Model {
     pub request: Request,
     pub snapshot: Option<Snapshot>,
+    pub input_result: Option<String>,
+    pub tab: Tab,
     pub status: String,
     pub scroll: usize,
     pub width: u16,
@@ -28,7 +48,7 @@ pub enum Message {
     },
     Loaded {
         generation: u64,
-        result: Result<Snapshot, String>,
+        result: Result<Content, String>,
     },
 }
 
@@ -42,6 +62,8 @@ impl Model {
         Self {
             request,
             snapshot: None,
+            input_result: None,
+            tab: Tab::Overview,
             status: "Loading execution…".into(),
             scroll: 0,
             width: width.saturating_sub(2).max(1),
@@ -51,10 +73,14 @@ impl Model {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        self.snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.overview.as_str())
-            .unwrap_or("")
+        let text = match self.tab {
+            Tab::Overview => self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.overview.as_str()),
+            Tab::InputResult => self.input_result.as_deref(),
+        };
+        text.unwrap_or("")
             .lines()
             .flat_map(|line| {
                 textwrap::wrap(line, usize::from(self.width))
@@ -63,15 +89,37 @@ impl Model {
             })
             .collect()
     }
+
+    fn load_tab(&mut self, refresh: bool) -> Option<Command> {
+        if self.loading {
+            return None;
+        }
+        let (kind, missing) = match self.tab {
+            Tab::Overview => (Kind::Overview, self.snapshot.is_none()),
+            Tab::InputResult => (Kind::InputResult, self.input_result.is_none()),
+        };
+        if !refresh && !missing {
+            return None;
+        }
+        self.loading = true;
+        self.status = "Loading execution…".into();
+        self.request.kind = kind;
+        Some(Command::Load(self.request.clone()))
+    }
 }
 
 pub fn update(model: &mut Model, message: Message) -> Option<Command> {
     match message {
         Message::Action(Action::Back) => return Some(Command::Close),
-        Message::Action(Action::Refresh) if !model.loading => {
-            model.loading = true;
-            model.status = "Loading execution…".into();
-            return Some(Command::Load(model.request.clone()));
+        Message::Action(Action::Refresh) => return model.load_tab(true),
+        Message::Action(Action::Left | Action::Right) => {
+            model.tab = if model.tab == Tab::Overview {
+                Tab::InputResult
+            } else {
+                Tab::Overview
+            };
+            model.scroll = 0;
+            return model.load_tab(false);
         }
         Message::Action(Action::Up) => model.scroll = model.scroll.saturating_sub(1),
         Message::Action(Action::Down) => model.scroll += 1,
@@ -82,9 +130,15 @@ pub fn update(model: &mut Model, message: Message) -> Option<Command> {
         Message::Loaded { generation, result } if generation == model.request.generation => {
             model.loading = false;
             match result {
-                Ok(snapshot) => {
-                    model.snapshot = Some(snapshot);
+                Ok(content) => {
+                    match content {
+                        Content::Overview(snapshot) => model.snapshot = Some(snapshot),
+                        Content::InputResult(text) => model.input_result = Some(text),
+                    }
                     model.status = "Execution details".into();
+                    if let Some(command) = model.load_tab(false) {
+                        return Some(command);
+                    }
                 }
                 Err(error) => model.status = format!("Error: {error}"),
             }
@@ -109,6 +163,7 @@ mod tests {
                     workflow_id: "id".into(),
                     run_id: "run".into(),
                 },
+                kind: Kind::Overview,
             },
             20,
             8,
@@ -122,9 +177,9 @@ mod tests {
             &mut model,
             Message::Loaded {
                 generation: 0,
-                result: Ok(Snapshot {
+                result: Ok(Content::Overview(Snapshot {
                     overview: "stale".into(),
-                }),
+                })),
             },
         );
         assert!(model.snapshot.is_none());
@@ -132,9 +187,9 @@ mod tests {
             &mut model,
             Message::Loaded {
                 generation: 1,
-                result: Ok(Snapshot {
+                result: Ok(Content::Overview(Snapshot {
                     overview: "current".into(),
-                }),
+                })),
             },
         );
         assert!(matches!(
@@ -150,5 +205,37 @@ mod tests {
         );
         assert_eq!(model.snapshot.unwrap().overview, "current");
         assert!(model.status.contains("unavailable"));
+    }
+
+    #[test]
+    fn loads_input_tab_after_pending_overview_and_caches_it() {
+        let mut model = model();
+        assert!(update(&mut model, Message::Action(Action::Right)).is_none());
+        let command = update(
+            &mut model,
+            Message::Loaded {
+                generation: 1,
+                result: Ok(Content::Overview(Snapshot {
+                    overview: "Status: Running".into(),
+                })),
+            },
+        );
+        assert!(matches!(
+            command,
+            Some(Command::Load(Request {
+                kind: Kind::InputResult,
+                ..
+            }))
+        ));
+        update(
+            &mut model,
+            Message::Loaded {
+                generation: 1,
+                result: Ok(Content::InputResult("Input: 42".into())),
+            },
+        );
+        assert_eq!(model.lines(), ["Input: 42"]);
+        update(&mut model, Message::Action(Action::Left));
+        assert!(update(&mut model, Message::Action(Action::Right)).is_none());
     }
 }

@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout},
     style::{Color, Style},
-    widgets::{Block, Paragraph},
+    widgets::{Block, Paragraph, Tabs},
 };
 
 use crate::{details::Model, input::Keybindings};
@@ -17,7 +17,9 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings) {
     .areas(frame.area());
     frame.render_widget(Paragraph::new(model.status.as_str()), status);
     frame.render_widget(
-        Paragraph::new("Overview").style(Style::default().fg(Color::Cyan)),
+        Tabs::new(["Overview", "Input / Result"])
+            .select(model.tab as usize)
+            .highlight_style(Style::default().fg(Color::Cyan)),
         tabs,
     );
     let text = model
@@ -36,8 +38,8 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{}/{} scroll  {} refresh  Esc back  {} quit",
-            keys.down, keys.up, keys.refresh, keys.quit
+            "{}/{} scroll  {}/{} tabs  {} refresh  Esc back  {} quit",
+            keys.down, keys.up, keys.left, keys.right, keys.refresh, keys.quit
         )),
         help,
     );
@@ -61,6 +63,7 @@ mod tests {
                     workflow_id: "order".into(),
                     run_id: "old-run".into(),
                 },
+                kind: crate::details::Kind::Overview,
             },
             80,
             12,
