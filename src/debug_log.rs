@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    error::Error,
+    fs,
     future::Future,
     io::Write,
     path::PathBuf,
@@ -94,14 +96,18 @@ fn status(status: &Status) -> Value {
 }
 
 fn causes(error: &anyhow::Error) -> Vec<Value> {
-    error
-        .chain()
-        .map(|cause| {
-            if let Some(error) = cause.downcast_ref::<Status>() {
-                return status(error);
-            }
+    let mut result = Vec::new();
+    let mut next: Option<&(dyn Error + 'static)> = Some(error.as_ref());
+    while let Some(cause) = next {
+        next = cause.source();
+        let value = if let Some(error) = cause.downcast_ref::<Status>() {
+            status(error)
+        } else {
             match cause.downcast_ref::<ClientConnectError>() {
                 Some(ClientConnectError::SystemInfoCallError(error)) => {
+                    // The SDK does not mark this variant's Status as an error source.
+                    // Follow it explicitly to retain nested TLS/socket failures.
+                    next = error.source();
                     json!({ "operation": "GetSystemInfo", "error": status(error) })
                 }
                 Some(ClientConnectError::TonicTransportError(_)) => {
@@ -109,8 +115,10 @@ fn causes(error: &anyhow::Error) -> Vec<Value> {
                 }
                 _ => json!({ "message": cause.to_string() }),
             }
-        })
-        .collect()
+        };
+        result.push(value);
+    }
+    result
 }
 
 pub fn failure(operation: &str, error: &anyhow::Error) {
@@ -201,5 +209,21 @@ mod tests {
             .unwrap(),
             PathBuf::from("/home/test/.local/state/temporat")
         );
+    }
+
+    #[test]
+    fn system_info_status_retains_nested_transport_causes() {
+        let mut transport = Status::unknown("transport error");
+        transport.set_source(std::sync::Arc::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        )));
+        let error = anyhow::Error::new(ClientConnectError::SystemInfoCallError(transport))
+            .context("connecting to Temporal");
+        let chain = causes(&error);
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[1]["operation"], "GetSystemInfo");
+        assert_eq!(chain[1]["error"]["grpc_code"], "Unknown");
+        assert_eq!(chain[2]["message"], "connection reset by peer");
     }
 }
