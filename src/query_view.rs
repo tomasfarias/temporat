@@ -1,13 +1,14 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    style::{Color, Style},
-    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    text::Line,
+    widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::{
     input::Keybindings,
     query::{Dialog, Focus, QueryBar},
+    theme::Palette,
 };
 
 pub fn controls(area: Rect) -> [Rect; 4] {
@@ -20,7 +21,7 @@ pub fn controls(area: Rect) -> [Rect; 4] {
     .areas(area)
 }
 
-pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect, show_cursor: bool) {
+pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect, show_cursor: bool, palette: &Palette) {
     let [input, load, save, clear] = controls(area);
     let editing = model.focus == Focus::Input && model.dialog.is_none();
     let inner = input.inner(Margin::new(1, 1));
@@ -31,23 +32,30 @@ pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect, show_cursor: bool) {
         "Query (edited)"
     };
     frame.render_widget(
-        Paragraph::new(text).block(
-            Block::bordered()
+        Paragraph::new(text).style(palette.base()).block(
+            palette
+                .block()
                 .title(title)
-                .border_style(focus_style(editing)),
+                .border_style(palette.border(editing)),
         ),
         input,
     );
     frame.render_widget(
-        Paragraph::new(" Load ").block(Block::bordered().border_style(focus_style(false))),
+        Paragraph::new(" Load ")
+            .style(palette.surface())
+            .block(palette.block().style(palette.surface())),
         load,
     );
     frame.render_widget(
-        Paragraph::new(" Save ").block(Block::bordered().border_style(focus_style(false))),
+        Paragraph::new(" Save ")
+            .style(palette.surface())
+            .block(palette.block().style(palette.surface())),
         save,
     );
     frame.render_widget(
-        Paragraph::new(" Clear ").block(Block::bordered().border_style(focus_style(false))),
+        Paragraph::new(" Clear ")
+            .style(palette.surface())
+            .block(palette.block().style(palette.surface())),
         clear,
     );
     if show_cursor && editing && inner.width > 0 && inner.height > 0 {
@@ -55,11 +63,7 @@ pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect, show_cursor: bool) {
     }
 }
 
-fn focus_style(focused: bool) -> Style {
-    Style::default().fg(if focused { Color::Cyan } else { Color::Reset })
-}
-
-pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings) {
+pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings, palette: &Palette) {
     if let Some(Dialog::Save {
         name,
         error,
@@ -68,19 +72,25 @@ pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings) {
     {
         let area = popup(frame.area(), 7);
         frame.render_widget(Clear, area);
-        let block = Block::bordered()
+        let block = palette
+            .block()
+            .border_style(palette.border(true))
             .title("Save query")
-            .title_bottom("Enter saves/replaces name · Esc cancels");
+            .title_bottom(Line::styled(
+                "Enter saves/replaces name · Esc cancels",
+                palette.muted(),
+            ));
         let [input, status] =
             Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(block.inner(area));
         frame.render_widget(block, area);
         let inner = input.inner(Margin::new(1, 1));
         let (text, cursor) = name.visible(inner.width);
         frame.render_widget(
-            Paragraph::new(text).block(
-                Block::bordered()
+            Paragraph::new(text).style(palette.base()).block(
+                palette
+                    .block()
                     .title("Name")
-                    .border_style(focus_style(!saving)),
+                    .border_style(palette.border(!saving)),
             ),
             input,
         );
@@ -91,6 +101,11 @@ pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings) {
                 error
                     .as_deref()
                     .unwrap_or("Saves the query text shown in the bar.")
+            })
+            .style(if error.is_some() {
+                palette.error()
+            } else {
+                palette.muted()
             })
             .wrap(Wrap { trim: false }),
             status,
@@ -105,13 +120,19 @@ pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings) {
     };
     let area = popup(frame.area(), model.saved.len().min(20) as u16 + 4);
     frame.render_widget(Clear, area);
-    let block = Block::bordered().title("Load query").title_bottom(format!(
-        "{}/{} select · Enter load · Esc cancel",
-        keys.down, keys.up
-    ));
+    let block = palette
+        .block()
+        .border_style(palette.border(true))
+        .title("Load query")
+        .title_bottom(Line::styled(
+            format!("{}/{} select · Enter load · Esc cancel", keys.down, keys.up),
+            palette.muted(),
+        ));
     if model.saved.is_empty() {
         frame.render_widget(
-            Paragraph::new("No saved queries. Use Save or add [queries] in TOML.").block(block),
+            Paragraph::new("No saved queries. Use Save or add [queries] in TOML.")
+                .style(palette.base())
+                .block(block),
             area,
         );
     } else {
@@ -126,8 +147,9 @@ pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings) {
             ))
         });
         let list = List::new(items)
+            .style(palette.base())
             .block(block)
-            .highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
+            .highlight_style(palette.selection());
         frame.render_stateful_widget(
             list,
             area,
@@ -162,7 +184,14 @@ mod tests {
         for (width, height) in [(80, 12), (1, 1), (0, 0)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| modal(frame, &model, &Keybindings::default()))
+                .draw(|frame| {
+                    modal(
+                        frame,
+                        &model,
+                        &Keybindings::default(),
+                        &crate::theme::Theme::default().palette(),
+                    )
+                })
                 .unwrap();
             if width == 80 {
                 assert!(format!("{:?}", terminal.backend().buffer()).contains("Query 29"));
@@ -181,7 +210,14 @@ mod tests {
         for (width, height) in [(80, 12), (1, 1), (0, 0)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| modal(frame, &model, &Keybindings::default()))
+                .draw(|frame| {
+                    modal(
+                        frame,
+                        &model,
+                        &Keybindings::default(),
+                        &crate::theme::Theme::default().palette(),
+                    )
+                })
                 .unwrap();
             if width == 80 {
                 assert!(format!("{:?}", terminal.backend().buffer()).contains("disk error"));

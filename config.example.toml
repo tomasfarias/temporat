@@ -1,4 +1,7 @@
 # All settings are optional. TOML values override environment variables.
+[theme]
+name = "solarized-dark" # Also: solarized-light, nord, terminal (terminal palette).
+
 [connection]
 # Uncomment to override these defaults or environment settings.
 # address = "http://localhost:7233" # TEMPORAL_ADDRESS

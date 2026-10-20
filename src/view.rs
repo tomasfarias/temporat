@@ -1,7 +1,6 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
     widgets::{Block, Cell, Paragraph, Row, Table, TableState},
 };
 
@@ -45,21 +44,28 @@ pub fn areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 4] {
 }
 
 pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
+    let palette = config.theme.palette();
+    frame.render_widget(Block::default().style(palette.base()), frame.area());
     if let Some(details) = &model.details {
-        crate::details_view::view(frame, details, &config.keybindings);
+        crate::details_view::view(frame, details, &config.keybindings, &palette);
         if let Some(error) = &model.error {
-            crate::error_popup::view(frame, error, &config.keybindings);
+            crate::error_popup::view(frame, error, &config.keybindings, &palette);
         }
         return;
     }
     let [status, query, body, help] = areas(frame.area());
     let editing = model.query.focus == crate::query::Focus::Input;
-    crate::query_view::bar(frame, &model.query, query, model.error.is_none());
+    crate::query_view::bar(frame, &model.query, query, model.error.is_none(), &palette);
     frame.render_widget(
         Paragraph::new(format!(
             "{} | {}",
             config.connection.namespace, model.status
-        )),
+        ))
+        .style(if model.status.starts_with("Error") {
+            palette.error()
+        } else {
+            palette.surface()
+        }),
         status,
     );
     let columns = &model.columns;
@@ -79,15 +85,16 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         Row::new(columns.iter().enumerate().map(|(index, column)| {
             let cell = Cell::from(column.title());
             if index == model.selected_column {
-                cell.style(Style::default().bg(Color::Cyan).fg(Color::Black))
+                cell.style(palette.selected_header())
             } else {
                 cell
             }
         }))
-        .style(Style::default().fg(Color::Cyan)),
+        .style(palette.heading()),
     )
-    .block(Block::bordered().title("Workflows"))
-    .row_highlight_style(Style::default().bg(Color::DarkGray));
+    .style(palette.base())
+    .block(palette.block().title("Workflows"))
+    .row_highlight_style(palette.selection());
     // Widget state is local: rendering never changes the application model.
     let mut state = TableState::default()
         .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset));
@@ -103,7 +110,8 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
                 "Unable to load workflows; refresh to retry."
             } else {
                 "No workflows found."
-            }),
+            })
+            .style(palette.muted()),
             message,
         );
     }
@@ -112,13 +120,14 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
             "Enter apply  Esc cancel  Ctrl+o load  Ctrl+s save  Ctrl+u clear".into()
         } else {
             config.keybindings.help()
-        }),
+        })
+        .style(palette.muted()),
         help,
     );
     if let Some(error) = &model.error {
-        crate::error_popup::view(frame, error, &config.keybindings);
+        crate::error_popup::view(frame, error, &config.keybindings, &palette);
     } else {
-        crate::query_view::modal(frame, &model.query, &config.keybindings);
+        crate::query_view::modal(frame, &model.query, &config.keybindings, &palette);
     }
 }
 
@@ -149,10 +158,12 @@ mod tests {
         for (before, after) in before.content.iter().zip(&after.content) {
             assert_eq!(before.symbol(), after.symbol());
         }
-        assert_eq!(before[(1, 5)].bg, Color::Cyan);
-        assert_eq!(after[(1, 5)].bg, Color::Reset);
-        assert_eq!(before[(1, 6)].bg, Color::DarkGray);
-        assert_eq!(after[(1, 6)].bg, Color::DarkGray);
+        let palette = config.theme.palette();
+        assert_eq!(before[(1, 5)].bg, palette.surface);
+        assert_eq!(before[(1, 5)].fg, palette.accent);
+        assert_eq!(after[(1, 5)].bg, palette.background);
+        assert_eq!(before[(1, 6)].bg, palette.surface);
+        assert_eq!(after[(1, 6)].bg, palette.surface);
         for y in 6..before.area.height {
             for x in 0..before.area.width {
                 assert_eq!(before[(x, y)], after[(x, y)]);
@@ -163,7 +174,7 @@ mod tests {
                 .content
                 .iter()
                 .zip(&before.content)
-                .any(|(after, before)| after.bg == Color::Cyan && before.bg != Color::Cyan)
+                .any(|(after, before)| after.bg == palette.surface && before.bg != palette.surface)
         );
     }
 

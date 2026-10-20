@@ -1,16 +1,16 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
-    widgets::{Block, List, ListItem, ListState, Paragraph, Tabs},
+    widgets::{List, ListItem, ListState, Paragraph, Tabs},
 };
 
 use crate::{
     details::{Model, Tab},
     input::Keybindings,
+    theme::Palette,
 };
 
-pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings) {
+pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings, palette: &Palette) {
     let [status, tabs, body, help] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -31,14 +31,22 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings) {
     } else {
         model.status.clone()
     };
-    frame.render_widget(Paragraph::new(status_text), status);
+    frame.render_widget(
+        Paragraph::new(status_text).style(if model.status.starts_with("Error") {
+            palette.error()
+        } else {
+            palette.surface()
+        }),
+        status,
+    );
     frame.render_widget(
         Tabs::new(["Overview", "Input / Result", "History"])
+            .style(palette.muted())
             .select(model.tab as usize)
-            .highlight_style(Style::default().fg(Color::Cyan)),
+            .highlight_style(palette.selected_header()),
         tabs,
     );
-    let block = Block::bordered().title(format!(
+    let block = palette.block().title(format!(
         "{} · {}",
         model.request.execution.workflow_id, model.request.execution.run_id
     ));
@@ -51,8 +59,9 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings) {
             .take(model.visible_rows)
             .map(|event| ListItem::new(format!("{:>6}  {}  {}", event.id, event.time, event.kind)));
         let list = List::new(items)
+            .style(palette.base())
             .block(block)
-            .highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black));
+            .highlight_style(palette.selection());
         let selected = model
             .history
             .as_ref()
@@ -71,13 +80,17 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings) {
             .take(model.visible_rows)
             .collect::<Vec<_>>()
             .join("\n");
-        frame.render_widget(Paragraph::new(text).block(block), body);
+        frame.render_widget(
+            Paragraph::new(text).style(palette.base()).block(block),
+            body,
+        );
     }
     frame.render_widget(
         Paragraph::new(format!(
             "{}/{} scroll  {}/{} tabs  Enter event  {} refresh  Esc back  {} quit",
             keys.down, keys.up, keys.left, keys.right, keys.refresh, keys.quit
-        )),
+        ))
+        .style(palette.muted()),
         help,
     );
 }
@@ -111,7 +124,14 @@ mod tests {
         for (width, height) in [(80, 12), (1, 1), (0, 0)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| view(frame, &model, &Keybindings::default()))
+                .draw(|frame| {
+                    view(
+                        frame,
+                        &model,
+                        &Keybindings::default(),
+                        &crate::theme::Theme::default().palette(),
+                    )
+                })
                 .unwrap();
             if width == 80 {
                 let text = format!("{:?}", terminal.backend().buffer());

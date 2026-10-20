@@ -14,6 +14,7 @@ mod saved_queries;
 mod temporal;
 mod temporal_details;
 mod text_input;
+mod theme;
 mod view;
 mod workflow;
 

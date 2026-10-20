@@ -11,6 +11,7 @@ use serde::Deserialize;
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub theme: crate::theme::Theme,
     pub connection: Connection,
     pub table: Table,
     pub keybindings: crate::input::Keybindings,
@@ -350,6 +351,8 @@ mod tests {
     fn rejects_invalid_settings() {
         for source in [
             "typo = true",
+            "[theme]\nname = 'unknown'",
+            "[theme]\nbackground = 'unsupported'",
             "[table]\ncolumns = []",
             "[table]\ncolumns = ['unknown']",
             "[table]\npage_size = 0",
