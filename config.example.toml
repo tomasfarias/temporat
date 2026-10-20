@@ -4,7 +4,8 @@
 # address = "http://localhost:7233" # TEMPORAL_ADDRESS
 # namespace = "default" # TEMPORAL_NAMESPACE
 # api_key = "..." # TEMPORAL_API_KEY; preferred over client certificates
-# API keys and TLS settings require an https:// address.
+# Bare endpoints (e.g. namespace.account.tmprl.cloud:7233) default to HTTPS.
+# Use explicit http:// for plaintext local servers; API keys require HTTPS.
 # Certificate files are PEM, relative to this file (environment paths use cwd).
 # tls_ca = "ca.pem" # TEMPORAL_TLS_CA
 # tls_cert = "client.pem" # TEMPORAL_TLS_CERT

@@ -57,12 +57,18 @@ pub async fn connect(config: &Connection) -> Result<Client> {
 }
 
 fn connection_options(config: &Connection) -> Result<ConnectionOptions> {
-    let target: Url = config
-        .address
+    let address = if config.address.contains("://") {
+        config.address.clone()
+    } else {
+        format!("https://{}", config.address)
+    };
+    let target: Url = address
         .parse()
-        .context("invalid connection.address URL")?;
+        .context("invalid connection.address endpoint")?;
     if !matches!(target.scheme(), "http" | "https") || target.host_str().is_none() {
-        bail!("connection.address must be an http:// or https:// URL with a host");
+        bail!(
+            "connection.address must be a host with an optional port, or an http:// or https:// URL"
+        );
     }
     if !target.username().is_empty()
         || target.password().is_some()
@@ -70,7 +76,7 @@ fn connection_options(config: &Connection) -> Result<ConnectionOptions> {
         || target.fragment().is_some()
         || target.path() != "/"
     {
-        bail!("connection.address must contain only a scheme, host, and optional port");
+        bail!("connection.address must contain only a host, optional port, and optional scheme");
     }
     let needs_tls = config.api_key.is_some()
         || config.tls_ca.is_some()
@@ -174,9 +180,30 @@ mod tests {
     }
 
     #[test]
+    fn bare_endpoints_enable_tls_with_or_without_api_keys() {
+        for address in [
+            "namespace.account.tmprl.cloud:7233",
+            "localhost:7233",
+            "[::1]:7233",
+        ] {
+            for api_key in [None, Some("secret".into())] {
+                let options = connection_options(&Connection {
+                    address: address.into(),
+                    api_key: api_key.clone(),
+                    ..Default::default()
+                })
+                .unwrap();
+                assert!(options.tls_options.is_some());
+                assert_eq!(options.api_key, api_key);
+            }
+        }
+    }
+
+    #[test]
     fn rejects_invalid_addresses_and_plaintext_credentials() {
         for address in [
-            "localhost:7233",
+            "",
+            "example.com:invalid-port",
             "ftp://example.com",
             "http://example.com/path",
             "http://user:secret@example.com",
