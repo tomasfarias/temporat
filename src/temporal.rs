@@ -9,6 +9,7 @@ use temporalio_common::protos::temporal::api::workflowservice::v1::ListWorkflowE
 
 use crate::{
     config::{Column, Connection},
+    debug_log,
     workflow::{self, Page},
 };
 
@@ -25,15 +26,18 @@ pub async fn list_page(
         next_page_token,
         query: query.to_owned(),
     };
-    let response = tokio::time::timeout(
-        Duration::from_secs(30),
-        client
-            .clone()
-            .list_workflow_executions(temporalio_client::tonic::Request::new(request)),
-    )
-    .await
-    .context("listing workflows timed out")?
-    .context("listing workflows")?
+    let response = debug_log::request("ListWorkflowExecutions", async {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            client
+                .clone()
+                .list_workflow_executions(temporalio_client::tonic::Request::new(request)),
+        )
+        .await
+        .context("listing workflows timed out")?
+        .context("listing workflows")
+    })
+    .await?
     .into_inner();
     Ok(Page {
         rows: response
@@ -46,7 +50,17 @@ pub async fn list_page(
 }
 
 pub async fn connect(config: &Connection) -> Result<Client> {
+    debug_log::request("connect", async {
     let options = connection_options(config)?;
+    debug_log::record("connection", serde_json::json!({
+        "endpoint": options.target.as_str(),
+        "namespace": config.namespace,
+        "tls": options.tls_options.is_some(),
+        "auth": if config.api_key.is_some() { "api_key" } else if config.tls_cert.is_some() { "mtls" } else { "none" },
+        "custom_ca": config.tls_ca.is_some(),
+        "tls_domain": config.tls_domain,
+        "timeout_seconds": 15,
+    }));
     tokio::time::timeout(
         Duration::from_secs(15),
         Client::connect(options, ClientOptions::new(&config.namespace).build()),
@@ -54,6 +68,7 @@ pub async fn connect(config: &Connection) -> Result<Client> {
     .await
     .context("Temporal connection timed out")?
     .context("connecting to Temporal")
+    }).await
 }
 
 fn connection_options(config: &Connection) -> Result<ConnectionOptions> {

@@ -15,6 +15,7 @@ use temporalio_common::protos::temporal::api::{
 
 use crate::{
     config::Column,
+    debug_log,
     details::Snapshot,
     payload,
     workflow::{self, Execution},
@@ -28,15 +29,18 @@ pub async fn load(client: &Client, execution: &Execution) -> Result<Snapshot> {
             run_id: execution.run_id.clone(),
         }),
     };
-    let response = tokio::time::timeout(
-        Duration::from_secs(30),
-        client
-            .clone()
-            .describe_workflow_execution(Request::new(request)),
-    )
-    .await
-    .context("describing workflow timed out")?
-    .context("describing workflow")?
+    let response = debug_log::request("DescribeWorkflowExecution", async {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            client
+                .clone()
+                .describe_workflow_execution(Request::new(request)),
+        )
+        .await
+        .context("describing workflow timed out")?
+        .context("describing workflow")
+    })
+    .await?
     .into_inner();
     Ok(snapshot(response))
 }
@@ -92,15 +96,18 @@ pub async fn history_page(
         wait_new_event: false,
         ..Default::default()
     };
-    let response = tokio::time::timeout(
-        Duration::from_secs(30),
-        client
-            .clone()
-            .get_workflow_execution_history(Request::new(request)),
-    )
-    .await
-    .context("fetching workflow history timed out")?
-    .context("fetching workflow history")?
+    let response = debug_log::request("GetWorkflowExecutionHistory", async {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            client
+                .clone()
+                .get_workflow_execution_history(Request::new(request)),
+        )
+        .await
+        .context("fetching workflow history timed out")?
+        .context("fetching workflow history")
+    })
+    .await?
     .into_inner();
     let token = response.next_page_token.clone();
     Ok((events(response)?, token))
