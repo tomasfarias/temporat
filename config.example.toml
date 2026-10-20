@@ -1,7 +1,8 @@
 # All settings are optional. TOML values override environment variables.
 [connection]
-address = "http://localhost:7233" # TEMPORAL_ADDRESS
-namespace = "default" # TEMPORAL_NAMESPACE
+# Uncomment to override these defaults or environment settings.
+# address = "http://localhost:7233" # TEMPORAL_ADDRESS
+# namespace = "default" # TEMPORAL_NAMESPACE
 # api_key = "..." # TEMPORAL_API_KEY; preferred over client certificates
 # API keys and TLS settings require an https:// address.
 # Certificate files are PEM, relative to this file (environment paths use cwd).

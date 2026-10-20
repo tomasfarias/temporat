@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env, fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -100,13 +100,39 @@ pub fn load(explicit: Option<PathBuf>) -> Result<Config> {
     let path = explicit
         .map(Ok)
         .unwrap_or_else(|| default_path(|key| env::var_os(key).map(PathBuf::from)))?;
-    let source = match fs::read_to_string(&path) {
-        Ok(source) => source,
-        Err(error) if error.kind() == ErrorKind::NotFound && !required => String::new(),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
-    };
+    let source = read_source(&path, required)?;
     parse(&source, &path, |key| env::var(key).ok())
         .with_context(|| format!("configuration {}", path.display()))
+}
+
+fn read_source(path: &Path, required: bool) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(source) => Ok(source),
+        Err(error) if error.kind() == ErrorKind::NotFound && !required => {
+            create_default(path)?;
+            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
+        }
+        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn create_default(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)
+        .with_context(|| format!("creating configuration directory {}", parent.display()))?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).context("creating configuration temporary file")?;
+    temporary.write_all(include_bytes!("../config.example.toml"))?;
+    temporary.as_file().sync_all()?;
+    // Publish only a complete template, without replacing a concurrent launch's config.
+    match temporary.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("creating {}", path.display())),
+    }
 }
 
 fn default_path(get: impl Fn(&str) -> Option<PathBuf>) -> Result<PathBuf> {
@@ -220,7 +246,55 @@ mod tests {
     #[test]
     fn explicitly_selected_missing_files_are_errors() {
         let directory = tempfile::tempdir().unwrap();
-        assert!(load(Some(directory.path().join("missing.toml"))).is_err());
+        let path = directory.path().join("missing.toml");
+        assert!(load(Some(path.clone())).is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn first_launch_creates_a_template_without_persisting_environment_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("temporat/config.toml");
+        let source = read_source(&path, false).unwrap();
+        assert_eq!(source, include_str!("../config.example.toml"));
+        let config = parse(&source, &path, |key| match key {
+            "TEMPORAL_ADDRESS" => Some("https://cloud.example:7233".into()),
+            "TEMPORAL_NAMESPACE" => Some("cloud-namespace".into()),
+            "TEMPORAL_API_KEY" => Some("environment-secret".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(config.connection.address, "https://cloud.example:7233");
+        assert_eq!(config.connection.namespace, "cloud-namespace");
+        assert_eq!(
+            config.connection.api_key.as_deref(),
+            Some("environment-secret")
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        assert_eq!(read_source(&path, false).unwrap(), source);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn initialization_preserves_existing_files_even_if_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        for source in [
+            "# Custom configuration\n[connection]\nnamespace = 'mine'",
+            "[broken",
+        ] {
+            fs::write(&path, source).unwrap();
+            // A file created after the initial read must not be overwritten either.
+            create_default(&path).unwrap();
+            assert_eq!(read_source(&path, false).unwrap(), source);
+        }
     }
 
     #[test]
