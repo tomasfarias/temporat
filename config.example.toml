@@ -23,7 +23,7 @@ All = ""
 Running = "ExecutionStatus = 'Running'"
 Failed = "ExecutionStatus = 'Failed'"
 
-# Single-character bindings; Ctrl-C always quits.
+# Single-character bindings; Ctrl+c always quits.
 [keybindings]
 up = "k"
 down = "j"
