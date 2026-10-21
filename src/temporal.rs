@@ -75,7 +75,11 @@ fn connection_options(config: &Connection) -> Result<ConnectionOptions> {
     let address = if config.address.contains("://") {
         config.address.clone()
     } else {
-        format!("https://{}", config.address)
+        format!(
+            "{}://{}",
+            if config.tls { "https" } else { "http" },
+            config.address
+        )
     };
     let target: Url = address
         .parse()
@@ -84,6 +88,9 @@ fn connection_options(config: &Connection) -> Result<ConnectionOptions> {
         bail!(
             "connection.address must be a host with an optional port, or an http:// or https:// URL"
         );
+    }
+    if (target.scheme() == "https") != config.tls {
+        bail!("address scheme conflicts with tls; use a bare host:port or a matching scheme");
     }
     if !target.username().is_empty()
         || target.password().is_some()
@@ -165,10 +172,13 @@ mod tests {
         assert_eq!(options.api_key.as_deref(), Some("secret"));
         assert!(options.tls_options.unwrap().client_tls_options.is_none());
         assert!(
-            connection_options(&Connection::default())
-                .unwrap()
-                .tls_options
-                .is_none()
+            connection_options(&Connection {
+                tls: false,
+                ..Default::default()
+            })
+            .unwrap()
+            .tls_options
+            .is_none()
         );
     }
 
@@ -235,6 +245,7 @@ mod tests {
         assert!(
             connection_options(&Connection {
                 api_key: Some("secret".into()),
+                tls: false,
                 ..Default::default()
             })
             .is_err()

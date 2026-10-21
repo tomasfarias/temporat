@@ -1,19 +1,23 @@
-# All settings are optional. TOML values override environment variables.
+# Each profile requires an address and namespace. Other settings are optional.
+default_profile = "development"
+
 [theme]
 name = "solarized-dark" # Also: solarized-light, nord, terminal (terminal palette).
 
-[connection]
-# Uncomment to override these defaults or environment settings.
-# address = "http://localhost:7233" # TEMPORAL_ADDRESS
-# namespace = "default" # TEMPORAL_NAMESPACE
-# api_key = "..." # TEMPORAL_API_KEY; preferred over client certificates
-# Bare endpoints (e.g. namespace.account.tmprl.cloud:7233) default to HTTPS.
-# Use explicit http:// for plaintext local servers; API keys require HTTPS.
-# Certificate files are PEM, relative to this file (environment paths use cwd).
-# tls_ca = "ca.pem" # TEMPORAL_TLS_CA
-# tls_cert = "client.pem" # TEMPORAL_TLS_CERT
-# tls_key = "client.key" # TEMPORAL_TLS_KEY
-# tls_domain = "temporal.example.com" # TEMPORAL_TLS_DOMAIN
+[profiles.development]
+address = "localhost:7233"
+namespace = "default"
+tls = false # TLS defaults to true; disable it for plaintext local servers.
+
+# [profiles.production]
+# address = "us-east-1.aws.api.temporal.io:7233"
+# namespace = "production.abc123"
+# api_key = "..." # Preferred over client certificates. Requires TLS.
+# Certificate files are PEM, relative to this TOML file.
+# tls_ca = "ca.pem"
+# tls_cert = "client.pem"
+# tls_key = "client.key"
+# tls_domain = "temporal.example.com"
 
 [table]
 columns = ["workflow_id", "workflow_type", "status", "start_time", "close_time"]

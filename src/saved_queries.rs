@@ -78,7 +78,7 @@ mod tests {
     fn saves_and_replaces_queries_without_rewriting_unrelated_settings() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let prefix = "# My settings\n[connection]\nnamespace = 'custom' # keep this\n\n";
+        let prefix = "# My settings\ndefault_profile = 'custom'\n[profiles.custom]\naddress = 'localhost:7233'\nnamespace = 'custom' # keep this\ntls = false\n\n";
         fs::write(
             &path,
             format!("{prefix}[queries]\nRunning = 'old' # keep query comment\n"),

@@ -20,7 +20,7 @@ struct Log {
     secrets: Vec<String>,
 }
 
-pub fn init(api_key: Option<&str>) -> Result<PathBuf> {
+pub fn init<'a>(api_keys: impl IntoIterator<Item = &'a str>) -> Result<PathBuf> {
     let directory = directory(|key| env::var_os(key).map(PathBuf::from))?;
     fs::create_dir_all(&directory).context("creating debug log directory")?;
     // A separate, owner-only file for each invocation, including concurrent launches.
@@ -30,7 +30,7 @@ pub fn init(api_key: Option<&str>) -> Result<PathBuf> {
         .tempfile_in(&directory)
         .context("creating debug log")?;
     let (file, path) = temporary.keep().context("keeping debug log")?;
-    LOG.set(Mutex::new(Log::new(file, api_key)))
+    LOG.set(Mutex::new(Log::new(file, api_keys)))
         .map_err(|_| anyhow::anyhow!("debug logging already initialized"))?;
     Ok(path)
 }
@@ -46,14 +46,16 @@ fn directory(get: impl Fn(&str) -> Option<PathBuf>) -> Result<PathBuf> {
 }
 
 impl Log {
-    fn new(file: fs::File, api_key: Option<&str>) -> Self {
+    fn new<'a>(file: fs::File, api_keys: impl IntoIterator<Item = &'a str>) -> Self {
         let mut secrets = Vec::new();
-        if let Some(key) = api_key.filter(|key| !key.is_empty()) {
+        for key in api_keys.into_iter().filter(|key| !key.is_empty()) {
             // Error messages can contain either literal or Debug-escaped strings.
             let escaped = format!("{key:?}");
             secrets.push(escaped[1..escaped.len() - 1].to_owned());
             secrets.push(key.to_owned());
         }
+        secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+        secrets.dedup();
         Self { file, secrets }
     }
 

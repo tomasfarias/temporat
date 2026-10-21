@@ -30,6 +30,9 @@ struct Args {
     /// TOML configuration file (also accepts TEMPORAT_CONFIG).
     #[arg(long)]
     config: Option<PathBuf>,
+    /// Startup profile (overrides default_profile in TOML).
+    #[arg(long)]
+    profile: Option<String>,
     /// Check the Temporal connection without opening the TUI.
     #[arg(long)]
     check_connection: bool,
@@ -44,9 +47,17 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let config = config::load(args.config.clone())?;
+    let mut config = config::load(args.config.clone())?;
+    if let Some(profile) = &args.profile {
+        config.select_profile(profile.clone())?;
+    }
     let log_path = if args.debug {
-        let path = debug_log::init(config.connection.api_key.as_deref())?;
+        let path = debug_log::init(
+            config
+                .profiles
+                .values()
+                .filter_map(|profile| profile.api_key.as_deref()),
+        )?;
         eprintln!("Debug log: {}", path.display());
         debug_log::record(
             "startup",
@@ -73,7 +84,7 @@ async fn main() -> Result<()> {
 
 async fn run(args: Args, config: config::Config) -> Result<()> {
     if args.check_connection {
-        let client = temporal::connect(&config.connection).await?;
+        let client = temporal::connect(config.connection()).await?;
         let page = temporal::list_page(
             &client,
             &config.table.columns,

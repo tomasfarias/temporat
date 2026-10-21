@@ -70,7 +70,7 @@ pub async fn run(
                     detail_request = Some(tasks.spawn(async move {
                         let result = async {
                             if client.is_none() {
-                                client = Some(temporal::connect(&config.connection).await?);
+                                client = Some(temporal::connect(config.connection()).await?);
                             }
                             let client = client.as_ref().expect("connected above");
                             match request.kind {
@@ -211,7 +211,7 @@ async fn load(
 ) -> (Option<Client>, Message) {
     let result = async {
         if client.is_none() {
-            client = Some(temporal::connect(&config.connection).await?);
+            client = Some(temporal::connect(config.connection()).await?);
         }
         temporal::list_page(
             client.as_ref().expect("connected above"),

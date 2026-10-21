@@ -8,19 +8,56 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
+    pub default_profile: String,
+    pub profiles: BTreeMap<String, Connection>,
+    #[serde(default)]
     pub theme: crate::theme::Theme,
-    pub connection: Connection,
+    #[serde(default)]
     pub table: Table,
+    #[serde(default)]
     pub keybindings: crate::input::Keybindings,
+    #[serde(default)]
     pub queries: BTreeMap<String, String>,
     #[serde(skip)]
     pub path: PathBuf,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            default_profile: "development".into(),
+            profiles: BTreeMap::from([(
+                "development".into(),
+                Connection {
+                    tls: false,
+                    ..Connection::default()
+                },
+            )]),
+            theme: Default::default(),
+            table: Default::default(),
+            keybindings: Default::default(),
+            queries: Default::default(),
+            path: Default::default(),
+        }
+    }
+}
+
 impl Config {
+    pub fn connection(&self) -> &Connection {
+        &self.profiles[&self.default_profile]
+    }
+
+    pub fn select_profile(&mut self, name: String) -> Result<()> {
+        if !self.profiles.contains_key(&name) {
+            bail!("unknown profile {name:?}");
+        }
+        self.default_profile = name;
+        Ok(())
+    }
+
     pub fn initial_query(&self) -> &str {
         self.table
             .default_query
@@ -32,23 +69,35 @@ impl Config {
 }
 
 // Deliberately no Debug: this structure contains credentials.
-#[derive(Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Connection {
     pub address: String,
     pub namespace: String,
+    #[serde(default = "tls_default")]
+    pub tls: bool,
+    #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
     pub tls_ca: Option<PathBuf>,
+    #[serde(default)]
     pub tls_cert: Option<PathBuf>,
+    #[serde(default)]
     pub tls_key: Option<PathBuf>,
+    #[serde(default)]
     pub tls_domain: Option<String>,
+}
+
+fn tls_default() -> bool {
+    true
 }
 
 impl Default for Connection {
     fn default() -> Self {
         Self {
-            address: "http://localhost:7233".into(),
+            address: "localhost:7233".into(),
             namespace: "default".into(),
+            tls: true,
             api_key: None,
             tls_ca: None,
             tls_cert: None,
@@ -102,8 +151,7 @@ pub fn load(explicit: Option<PathBuf>) -> Result<Config> {
         .map(Ok)
         .unwrap_or_else(|| default_path(|key| env::var_os(key).map(PathBuf::from)))?;
     let source = read_source(&path, required)?;
-    parse(&source, &path, |key| env::var(key).ok())
-        .with_context(|| format!("configuration {}", path.display()))
+    parse(&source, &path).with_context(|| format!("configuration {}", path.display()))
 }
 
 fn read_source(path: &Path, required: bool) -> Result<String> {
@@ -146,48 +194,51 @@ fn default_path(get: impl Fn(&str) -> Option<PathBuf>) -> Result<PathBuf> {
     Ok(home.join(".config/temporat/config.toml"))
 }
 
-fn parse(source: &str, path: &Path, get: impl Fn(&str) -> Option<String>) -> Result<Config> {
+fn parse(source: &str, path: &Path) -> Result<Config> {
     // Do not include TOML's source excerpts in errors: they may contain API keys.
-    let mut document: toml::Table = toml::from_str(source)
+    let mut config: Config = toml::from_str(source)
         .map_err(|error: toml::de::Error| anyhow::anyhow!("invalid TOML: {}", error.message()))?;
-    let connection = document
-        .entry("connection")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let connection = connection
-        .as_table_mut()
-        .context("connection must be a TOML table")?;
-    for (field, variable) in [
-        ("address", "TEMPORAL_ADDRESS"),
-        ("namespace", "TEMPORAL_NAMESPACE"),
-        ("api_key", "TEMPORAL_API_KEY"),
-        ("tls_ca", "TEMPORAL_TLS_CA"),
-        ("tls_cert", "TEMPORAL_TLS_CERT"),
-        ("tls_key", "TEMPORAL_TLS_KEY"),
-        ("tls_domain", "TEMPORAL_TLS_DOMAIN"),
-    ] {
-        if let Some(value) = connection.get_mut(field) {
-            if matches!(field, "tls_ca" | "tls_cert" | "tls_key") {
-                let relative = Path::new(
-                    value
-                        .as_str()
-                        .context("certificate paths must be strings")?,
-                );
-                *value = toml::Value::String(
-                    path.parent()
-                        .unwrap_or(Path::new("."))
-                        .join(relative)
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-            }
-        } else if let Some(value) = get(variable) {
-            connection.insert(field.into(), toml::Value::String(value));
+    config.path = path.to_path_buf();
+    config.select_profile(config.default_profile.clone())?;
+    for (name, connection) in &mut config.profiles {
+        if name.trim().is_empty() || name.chars().any(char::is_control) {
+            bail!("profile names must be nonempty and contain no control characters");
+        }
+        if connection.address.trim().is_empty() || connection.namespace.trim().is_empty() {
+            bail!("profile {name:?} requires a nonempty address and namespace");
+        }
+        if connection
+            .api_key
+            .as_ref()
+            .is_some_and(|key| key.trim().is_empty())
+        {
+            bail!("profile {name:?}: api_key must not be empty");
+        }
+        if connection.api_key.is_none()
+            && (connection.tls_cert.is_some() != connection.tls_key.is_some())
+        {
+            bail!("profile {name:?}: set both tls_cert and tls_key");
+        }
+        if !connection.tls
+            && (connection.api_key.is_some()
+                || connection.tls_ca.is_some()
+                || connection.tls_cert.is_some()
+                || connection.tls_key.is_some()
+                || connection.tls_domain.is_some())
+        {
+            bail!("profile {name:?}: API keys and TLS settings require tls = true");
+        }
+        for file in [
+            &mut connection.tls_ca,
+            &mut connection.tls_cert,
+            &mut connection.tls_key,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *file = path.parent().unwrap_or(Path::new(".")).join(&*file);
         }
     }
-    let mut config: Config = document.try_into().map_err(|error: toml::de::Error| {
-        anyhow::anyhow!("invalid settings: {}", error.message())
-    })?;
-    config.path = path.to_path_buf();
     if let Some(name) = &config.table.default_query
         && !config.queries.contains_key(name)
     {
@@ -201,22 +252,6 @@ fn parse(source: &str, path: &Path, get: impl Fn(&str) -> Option<String>) -> Res
         bail!("query names must be nonempty and contain no control characters");
     }
     config.keybindings.validate()?;
-    if config.connection.namespace.trim().is_empty() {
-        bail!("connection.namespace must not be empty");
-    }
-    if config
-        .connection
-        .api_key
-        .as_ref()
-        .is_some_and(|key| key.trim().is_empty())
-    {
-        bail!("connection.api_key must not be empty");
-    }
-    if config.connection.api_key.is_none()
-        && (config.connection.tls_cert.is_some() != config.connection.tls_key.is_some())
-    {
-        bail!("set both connection.tls_cert and connection.tls_key");
-    }
     if config.table.columns.is_empty() {
         bail!("table.columns must not be empty");
     }
@@ -235,13 +270,20 @@ mod tests {
     use super::*;
 
     fn read(source: &str) -> Result<Config> {
-        parse(source, Path::new("/config/temporat/config.toml"), |_| None)
+        parse(source, Path::new("/config/temporat/config.toml"))
+    }
+
+    const BASE: &str = "default_profile = 'dev'\n[profiles.dev]\naddress = 'localhost:7233'\nnamespace = 'default'\n";
+
+    fn settings(source: &str) -> Result<Config> {
+        read(&format!("{BASE}{source}"))
     }
 
     #[test]
-    fn example_and_empty_config_are_valid() {
+    fn example_is_valid_and_profiles_are_required() {
         read(include_str!("../config.example.toml")).unwrap();
-        assert_eq!(read("").unwrap().connection.namespace, "default");
+        assert!(read("").is_err());
+        assert!(read("[connection]\nnamespace = 'default'").is_err());
     }
 
     #[test]
@@ -253,24 +295,16 @@ mod tests {
     }
 
     #[test]
-    fn first_launch_creates_a_template_without_persisting_environment_settings() {
+    fn first_launch_creates_a_private_template() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("temporat/config.toml");
         let source = read_source(&path, false).unwrap();
         assert_eq!(source, include_str!("../config.example.toml"));
-        let config = parse(&source, &path, |key| match key {
-            "TEMPORAL_ADDRESS" => Some("https://cloud.example:7233".into()),
-            "TEMPORAL_NAMESPACE" => Some("cloud-namespace".into()),
-            "TEMPORAL_API_KEY" => Some("environment-secret".into()),
-            _ => None,
-        })
-        .unwrap();
-        assert_eq!(config.connection.address, "https://cloud.example:7233");
-        assert_eq!(config.connection.namespace, "cloud-namespace");
-        assert_eq!(
-            config.connection.api_key.as_deref(),
-            Some("environment-secret")
-        );
+        let config = parse(&source, &path).unwrap();
+        assert_eq!(config.connection().address, "localhost:7233");
+        assert_eq!(config.connection().namespace, "default");
+        assert!(!config.connection().tls);
+        assert!(config.connection().api_key.is_none());
         assert_eq!(fs::read_to_string(&path).unwrap(), source);
         assert_eq!(read_source(&path, false).unwrap(), source);
         #[cfg(unix)]
@@ -299,19 +333,21 @@ mod tests {
     }
 
     #[test]
-    fn file_overrides_environment_per_field() {
-        let config = parse(
-            "[connection]\nnamespace = 'file'",
-            Path::new("config.toml"),
-            |key| match key {
-                "TEMPORAL_NAMESPACE" => Some("env".into()),
-                "TEMPORAL_API_KEY" => Some("secret".into()),
-                _ => None,
-            },
-        )
-        .unwrap();
-        assert_eq!(config.connection.namespace, "file");
-        assert_eq!(config.connection.api_key.as_deref(), Some("secret"));
+    fn profiles_are_explicit_and_startup_selection_is_validated() {
+        let mut config = settings("[profiles.cloud]\naddress = 'region.example:7233'\nnamespace = 'team.account'\napi_key = 'secret'").unwrap();
+        assert!(config.connection().tls);
+        config.select_profile("cloud".into()).unwrap();
+        assert_eq!(config.connection().namespace, "team.account");
+        assert_eq!(config.connection().api_key.as_deref(), Some("secret"));
+        assert!(config.select_profile("missing".into()).is_err());
+        assert_eq!(config.default_profile, "cloud");
+        for source in [
+            "default_profile = 'missing'\n[profiles]",
+            "default_profile = 'dev'\n[profiles.dev]\nnamespace = 'default'",
+            "default_profile = 'dev'\n[profiles.dev]\naddress = 'localhost:7233'",
+        ] {
+            assert!(read(source).is_err());
+        }
     }
 
     #[test]
@@ -335,14 +371,13 @@ mod tests {
 
     #[test]
     fn file_certificate_paths_are_relative_to_config() {
-        let config =
-            read("[connection]\ntls_cert = 'client.pem'\ntls_key = '/keys/client.key'").unwrap();
+        let config = settings("tls_cert = 'client.pem'\ntls_key = '/keys/client.key'").unwrap();
         assert_eq!(
-            config.connection.tls_cert.unwrap(),
+            config.connection().tls_cert.as_ref().unwrap(),
             Path::new("/config/temporat/client.pem")
         );
         assert_eq!(
-            config.connection.tls_key.unwrap(),
+            config.connection().tls_key.as_ref().unwrap(),
             Path::new("/keys/client.key")
         );
     }
@@ -356,26 +391,28 @@ mod tests {
             "[table]\ncolumns = []",
             "[table]\ncolumns = ['unknown']",
             "[table]\npage_size = 0",
-            "[connection]\ntls_cert = 'only.pem'",
-            "[connection]\nnamespace = ''",
+            "tls_cert = 'only.pem'",
+            "tls = false\napi_key = 'secret'",
+            "[profiles.other]\naddress = ''\nnamespace = 'default'",
+            "[profiles.other]\naddress = 'localhost:7233'\nnamespace = ''",
         ] {
-            assert!(read(source).is_err(), "accepted {source}");
+            assert!(settings(source).is_err(), "accepted {source}");
         }
     }
 
     #[test]
     fn preserves_column_order() {
-        let config = read("[table]\ncolumns = ['status', 'workflow_id']").unwrap();
+        let config = settings("[table]\ncolumns = ['status', 'workflow_id']").unwrap();
         assert_eq!(config.table.columns, [Column::Status, Column::WorkflowId]);
     }
 
     #[test]
     fn resolves_named_startup_query_and_retains_config_path() {
-        let config = read("[table]\ndefault_query = 'Running'\n[queries]\nRunning = \"ExecutionStatus = 'Running'\"\nAll = ''").unwrap();
+        let config = settings("[table]\ndefault_query = 'Running'\n[queries]\nRunning = \"ExecutionStatus = 'Running'\"\nAll = ''").unwrap();
         assert_eq!(config.initial_query(), "ExecutionStatus = 'Running'");
         assert_eq!(config.path, Path::new("/config/temporat/config.toml"));
-        assert_eq!(read("").unwrap().initial_query(), "");
-        assert!(read("[table]\ndefault_query = 'Missing'").is_err());
-        assert!(read("[queries]\n' ' = ''").is_err());
+        assert_eq!(settings("").unwrap().initial_query(), "");
+        assert!(settings("[table]\ndefault_query = 'Missing'").is_err());
+        assert!(settings("[queries]\n' ' = ''").is_err());
     }
 }
