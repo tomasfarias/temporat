@@ -1,6 +1,8 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
+    style::Style,
+    text::Line,
     widgets::{List, ListItem, ListState, Paragraph, Tabs},
 };
 
@@ -74,12 +76,23 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings, palette: &Pale
         );
     } else {
         let text = model
+            .text()
             .lines()
-            .into_iter()
+            .flat_map(|line| {
+                let style = if model.tab == Tab::Overview {
+                    line.strip_prefix("Status: ")
+                        .map(|status| palette.workflow_status(status))
+                        .unwrap_or_default()
+                } else {
+                    Style::default()
+                };
+                textwrap::wrap(line, usize::from(model.width))
+                    .into_iter()
+                    .map(move |line| Line::styled(line.into_owned(), style))
+            })
             .skip(model.scroll)
             .take(model.visible_rows)
-            .collect::<Vec<_>>()
-            .join("\n");
+            .collect::<Vec<_>>();
         frame.render_widget(
             Paragraph::new(text).style(palette.base()).block(block),
             body,

@@ -72,9 +72,25 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     let rows = model
         .rows
         .iter()
+        .enumerate()
         .skip(model.row_offset)
         .take(model.visible_rows)
-        .map(|row| Row::new(row.cells.iter().map(String::as_str)));
+        .map(|(index, row)| {
+            let cells = row.cells.iter().enumerate().map(|(column, text)| {
+                let cell = Cell::from(text.as_str());
+                if columns.get(column) == Some(&Column::Status) {
+                    cell.style(palette.workflow_status(text))
+                } else {
+                    cell
+                }
+            });
+            // Style the row before its cells so selection doesn't overwrite status colors.
+            Row::new(cells).style(if index == model.selected {
+                palette.selection()
+            } else {
+                palette.base()
+            })
+        });
     let table = Table::new(
         rows,
         columns
@@ -93,8 +109,7 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         .style(palette.heading()),
     )
     .style(palette.base())
-    .block(palette.block().title("Workflows"))
-    .row_highlight_style(palette.selection());
+    .block(palette.block().title("Workflows"));
     // Widget state is local: rendering never changes the application model.
     let mut state = TableState::default()
         .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset));
@@ -197,6 +212,68 @@ mod tests {
             }
             assert_eq!(model.rows.len(), 25);
             assert_eq!(model.selected, 0);
+        }
+    }
+
+    #[test]
+    fn status_colors_survive_row_selection_in_every_theme() {
+        use crate::{theme::Name, workflow::WorkflowRow};
+        for name in [
+            Name::SolarizedDark,
+            Name::SolarizedLight,
+            Name::Nord,
+            Name::Terminal,
+        ] {
+            let mut config = Config::default();
+            config.theme.name = name;
+            config.table.columns = vec![Column::WorkflowId, Column::Status];
+            let palette = config.theme.palette();
+            let statuses = [
+                ("Completed", palette.success),
+                ("Continued as new", palette.success),
+                ("Running", palette.running),
+                ("Timed out", palette.error),
+                ("Failed", palette.error),
+                ("Canceled", palette.canceled),
+                ("Terminated", palette.warning),
+                ("Unknown (999)", palette.foreground),
+            ];
+            let mut model = Model::preview(&config);
+            model.visible_rows = statuses.len();
+            model.rows = statuses
+                .iter()
+                .map(|(status, _)| WorkflowRow {
+                    cells: vec!["Failed".into(), (*status).into()],
+                    ..Default::default()
+                })
+                .collect();
+            let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+            for selected in 0..statuses.len() {
+                model.selected = selected;
+                terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+                let buffer = terminal.backend().buffer();
+                for (index, (_, color)) in statuses.iter().enumerate() {
+                    let y = 6 + index as u16;
+                    assert_eq!(buffer[(30, y)].fg, *color);
+                    assert_eq!(
+                        buffer[(30, y)].bg,
+                        if index == selected {
+                            palette.surface
+                        } else {
+                            palette.background
+                        }
+                    );
+                    // A workflow ID that happens to be a status name stays neutral.
+                    assert_eq!(
+                        buffer[(1, y)].fg,
+                        if index == selected {
+                            palette.selected_text
+                        } else {
+                            palette.foreground
+                        }
+                    );
+                }
+            }
         }
     }
 

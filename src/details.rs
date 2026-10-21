@@ -83,7 +83,7 @@ impl Model {
         }
     }
 
-    pub fn lines(&self) -> Vec<String> {
+    pub fn text(&self) -> &str {
         let text = match self.tab {
             Tab::Overview => self
                 .snapshot
@@ -98,6 +98,10 @@ impl Model {
             Tab::History => None,
         };
         text.unwrap_or("")
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        self.text()
             .lines()
             .flat_map(|line| {
                 textwrap::wrap(line, usize::from(self.width))

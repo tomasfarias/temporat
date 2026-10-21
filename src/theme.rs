@@ -30,6 +30,10 @@ pub struct Palette {
     pub accent: Color,
     pub selected_text: Color,
     pub error: Color,
+    pub success: Color,
+    pub running: Color,
+    pub warning: Color,
+    pub canceled: Color,
 }
 
 const fn rgb(hex: u32) -> Color {
@@ -48,6 +52,10 @@ impl Theme {
                 accent: rgb(0x268bd2),
                 selected_text: rgb(0x93a1a1),
                 error: rgb(0xdc322f),
+                success: rgb(0x859900),
+                running: rgb(0x268bd2),
+                warning: rgb(0xb58900),
+                canceled: rgb(0x657b83),
             },
             Name::SolarizedLight => Palette {
                 background: rgb(0xfdf6e3),
@@ -58,6 +66,10 @@ impl Theme {
                 accent: rgb(0x268bd2),
                 selected_text: rgb(0x586e75),
                 error: rgb(0xdc322f),
+                success: rgb(0x859900),
+                running: rgb(0x268bd2),
+                warning: rgb(0xb58900),
+                canceled: rgb(0x839496),
             },
             Name::Nord => Palette {
                 background: rgb(0x2e3440),
@@ -68,6 +80,10 @@ impl Theme {
                 accent: rgb(0x88c0d0),
                 selected_text: rgb(0xeceff4),
                 error: rgb(0xbf616a),
+                success: rgb(0xa3be8c),
+                running: rgb(0x81a1c1),
+                warning: rgb(0xebcb8b),
+                canceled: rgb(0xd8dee9),
             },
             Name::Terminal => Palette {
                 background: Color::Reset,
@@ -78,12 +94,29 @@ impl Theme {
                 accent: Color::Cyan,
                 selected_text: Color::White,
                 error: Color::Red,
+                success: Color::Green,
+                running: Color::Blue,
+                warning: Color::Yellow,
+                canceled: Color::Gray,
             },
         }
     }
 }
 
 impl Palette {
+    pub fn workflow_status(&self, status: &str) -> Style {
+        let color = match status {
+            "Completed" | "Continued as new" => self.success,
+            "Running" => self.running,
+            "Timed out" | "Failed" => self.error,
+            "Canceled" => self.canceled,
+            "Terminated" => self.warning,
+            _ => self.foreground,
+        };
+        // Foreground only: retain the selected row's background and emphasis.
+        Style::default().fg(color)
+    }
+
     pub fn base(&self) -> Style {
         Style::default().fg(self.foreground).bg(self.background)
     }
