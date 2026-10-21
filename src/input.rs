@@ -22,6 +22,7 @@ pub enum Action {
     SaveQuery,
     OpenDetails,
     Back,
+    Profiles,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +37,7 @@ pub struct Keybindings {
     pub query: char,
     pub load_query: char,
     pub save_query: char,
+    pub profiles: char,
 }
 
 impl Default for Keybindings {
@@ -50,12 +52,13 @@ impl Default for Keybindings {
             query: '/',
             load_query: 'o',
             save_query: 's',
+            profiles: 'n',
         }
     }
 }
 
 impl Keybindings {
-    fn bindings(&self) -> [(char, Action); 9] {
+    fn bindings(&self) -> [(char, Action); 10] {
         [
             (self.up, Action::Up),
             (self.down, Action::Down),
@@ -66,6 +69,7 @@ impl Keybindings {
             (self.query, Action::Query),
             (self.load_query, Action::LoadQuery),
             (self.save_query, Action::SaveQuery),
+            (self.profiles, Action::Profiles),
         ]
     }
 
@@ -105,7 +109,7 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} headers  Enter details  {} query  {} load  {} save  {} refresh  {} quit",
+            "{}/{} rows  {}/{} headers  Enter details  {} query  {} load  {} save  {} namespaces  {} refresh  {} quit",
             self.down,
             self.up,
             self.left,
@@ -113,6 +117,7 @@ impl Keybindings {
             self.query,
             self.load_query,
             self.save_query,
+            self.profiles,
             self.refresh,
             self.quit
         )
@@ -180,7 +185,7 @@ pub fn details_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
         KeyCode::Right => Some(Action::Right),
         _ => keys.action(key),
     }?;
-    if action == Action::Quit {
+    if matches!(action, Action::Quit | Action::Profiles) {
         Some(Message::Action(action))
     } else {
         Some(Message::Details(crate::details::Message::Action(action)))
@@ -233,7 +238,7 @@ pub fn mouse(
     }
 }
 
-fn edit(key: KeyEvent) -> Option<Edit> {
+pub(crate) fn edit(key: KeyEvent) -> Option<Edit> {
     if key.code == KeyCode::Char('u') && key.modifiers == KeyModifiers::CONTROL {
         return Some(Edit::Clear);
     }

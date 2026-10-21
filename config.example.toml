@@ -34,6 +34,7 @@ Failed = "ExecutionStatus = 'Failed'"
 
 # Single-character bindings; Ctrl+c always quits.
 [keybindings]
+profiles = "n"
 up = "k"
 down = "j"
 left = "h"

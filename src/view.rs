@@ -75,9 +75,8 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{} | {}",
-            config.connection().namespace,
-            model.status
+            "{} · {} | {}",
+            model.profile, config.profiles[&model.profile].namespace, model.status
         ))
         .style(if model.status.starts_with("Error") {
             palette.error()

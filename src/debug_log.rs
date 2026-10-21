@@ -156,7 +156,10 @@ mod tests {
     #[test]
     fn records_full_error_chain_but_redacts_keys_and_omits_grpc_metadata() {
         let key = "private-\"quoted\\key";
-        let mut grpc = Status::new(Code::Unauthenticated, format!("rejected {key} ({key:?})"));
+        let mut grpc = Status::new(
+            Code::Unauthenticated,
+            format!("rejected {key} ({key:?}), other-profile-token and other-profile-token-longer"),
+        );
         grpc.metadata_mut().insert(
             "authorization",
             "unrelated-metadata-secret".parse().unwrap(),
@@ -165,12 +168,17 @@ mod tests {
             .context("connecting to Temporal");
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("debug.log");
-        let mut log = Log::new(fs::File::create(&path).unwrap(), Some(key));
+        let mut log = Log::new(
+            fs::File::create(&path).unwrap(),
+            [key, "other-profile-token", "other-profile-token-longer"],
+        );
         log.write("error", json!({ "causes": causes(&error) }))
             .unwrap();
         log.write("finished", json!({ "success": false })).unwrap();
         let source = fs::read_to_string(path).unwrap();
         assert!(!source.contains("private-"));
+        assert!(!source.contains("other-profile"));
+        assert!(!source.contains("longer"));
         assert!(!source.contains("unrelated-metadata-secret"));
         assert!(!source.contains("authorization"));
         let entries = source

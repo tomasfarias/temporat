@@ -10,6 +10,7 @@ use crate::{
 
 // Elm: only update changes the model; view reads it; the runtime executes effects.
 pub struct Model {
+    pub profile: String,
     pub columns: Vec<Column>,
     pub rows: Vec<WorkflowRow>,
     pub selected: usize,
@@ -30,6 +31,7 @@ pub struct Model {
     generation: u64,
     pending_query: Option<String>,
     offline: bool,
+    has_cached_page: bool,
     loading: Option<LoadKind>,
     next_page_token: Vec<u8>,
     page_size: Option<u16>,
@@ -37,6 +39,8 @@ pub struct Model {
 }
 
 pub enum Message {
+    Profiles(crate::profiles::Message),
+    Resume,
     Action(Action),
     Resize {
         width: u16,
@@ -56,6 +60,13 @@ pub enum Message {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
+    PrepareProfile {
+        id: u64,
+        name: String,
+        query: String,
+        page_size: u16,
+    },
+    CancelSwitch,
     Batch(Vec<Effect>),
     Preview(details::Request),
     Details(details::Request),
@@ -84,6 +95,7 @@ impl Model {
         model.offline = offline;
         if !offline {
             model.rows.clear();
+            model.has_cached_page = false;
             model.status = "Ready".into();
         }
         model
@@ -91,6 +103,7 @@ impl Model {
 
     pub fn preview(config: &Config) -> Self {
         Self {
+            profile: config.default_profile.clone(),
             columns: config.table.columns.clone(),
             rows: (1..=25)
                 .map(|index| WorkflowRow {
@@ -121,6 +134,7 @@ impl Model {
             generation: 0,
             pending_query: None,
             offline: true,
+            has_cached_page: true,
             loading: None,
             next_page_token: Vec::new(),
             page_size: config.table.page_size,
@@ -130,6 +144,33 @@ impl Model {
 
     pub fn split(&self) -> bool {
         crate::layout::panes(self.area()).1.is_some()
+    }
+
+    pub fn suspend(&mut self) {
+        self.generation += 1;
+        if self.loading.take().is_some() {
+            self.status = format!("{} cached workflows", self.rows.len());
+        }
+        self.pending_query = None;
+        self.preview_pending = false;
+        self.details = None;
+        self.details_focused = false;
+    }
+
+    pub fn initial_page(&mut self, page: Page) -> Option<Effect> {
+        self.error = None;
+        self.loading = Some(LoadKind::Replace);
+        update(
+            self,
+            Message::Loaded {
+                generation: self.generation,
+                result: Ok(page),
+            },
+        )
+    }
+
+    pub fn has_cached_page(&self) -> bool {
+        self.has_cached_page
     }
 
     fn area(&self) -> ratatui::layout::Rect {
@@ -228,8 +269,10 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
     let previous_visible_rows = model.visible_rows;
     let scrolling_down = matches!(&message, Message::Action(Action::Down));
     let resizing = matches!(&message, Message::Resize { .. });
-    let received_page = matches!(&message, Message::Loaded { .. });
+    let received_page = matches!(&message, Message::Loaded { .. } | Message::Resume);
     match message {
+        Message::Profiles(_) | Message::Action(Action::Profiles) => return None,
+        Message::Resume => {}
         Message::PreviewReady { generation } => {
             if model.preview_pending
                 && let Some(detail) = &model.details
@@ -413,6 +456,7 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
                         }
                     }
                     model.next_page_token = page.next_page_token;
+                    model.has_cached_page = true;
                     let more = if model.next_page_token.is_empty() {
                         ""
                     } else {

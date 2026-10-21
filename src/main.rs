@@ -8,6 +8,7 @@ mod history;
 mod input;
 mod layout;
 mod payload;
+mod profiles;
 mod query;
 mod query_view;
 mod runtime;
@@ -94,7 +95,9 @@ async fn run(args: Args, config: config::Config) -> Result<()> {
         )
         .await?;
         println!(
-            "Connected to Temporal; {} workflows in first page (more: {})",
+            "Connected to Temporal: {} · {}; {} workflows in first page (more: {})",
+            config.default_profile,
+            config.connection().namespace,
             page.rows.len(),
             !page.next_page_token.is_empty()
         );
