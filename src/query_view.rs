@@ -42,20 +42,20 @@ pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect, show_cursor: bool, p
     );
     frame.render_widget(
         Paragraph::new(" Load ")
-            .style(palette.surface())
-            .block(palette.block().style(palette.surface())),
+            .style(palette.base())
+            .block(palette.block()),
         load,
     );
     frame.render_widget(
         Paragraph::new(" Save ")
-            .style(palette.surface())
-            .block(palette.block().style(palette.surface())),
+            .style(palette.base())
+            .block(palette.block()),
         save,
     );
     frame.render_widget(
         Paragraph::new(" Clear ")
-            .style(palette.surface())
-            .block(palette.block().style(palette.surface())),
+            .style(palette.base())
+            .block(palette.block()),
         clear,
     );
     if show_cursor && editing && inner.width > 0 && inner.height > 0 {
