@@ -10,11 +10,11 @@ use temporalio_common::protos::temporal::api::{
     workflowservice::v1::{
         DescribeWorkflowExecutionRequest, DescribeWorkflowExecutionResponse,
         GetWorkflowExecutionHistoryRequest, GetWorkflowExecutionHistoryResponse,
+        GetWorkflowExecutionHistoryReverseRequest,
     },
 };
 
 use crate::{
-    config::Column,
     debug_log,
     details::Snapshot,
     payload,
@@ -53,12 +53,7 @@ pub async fn input_result(client: &Client, execution: &Execution) -> Result<Stri
             Vec::new(),
             HistoryEventFilterType::AllEvent
         ),
-        history_page(
-            client,
-            execution,
-            Vec::new(),
-            HistoryEventFilterType::CloseEvent
-        ),
+        latest_event(client, execution),
     )?;
     let input = first
         .0
@@ -71,11 +66,40 @@ pub async fn input_result(client: &Client, execution: &Execution) -> Result<Stri
         })
         .unwrap_or_else(|| "Start event unavailable in the first history page.".into());
     let result = close
-        .0
-        .last()
+        .as_ref()
         .map(outcome)
-        .unwrap_or_else(|| "No close event; the execution may still be running.".into());
+        .unwrap_or_else(|| "No history events available.".into());
     Ok(format!("Input\n{input}\n\nResult / Failure\n{result}"))
+}
+
+async fn latest_event(client: &Client, execution: &Execution) -> Result<Option<HistoryEvent>> {
+    let request = GetWorkflowExecutionHistoryReverseRequest {
+        namespace: client.options().namespace.clone(),
+        execution: Some(WorkflowExecution {
+            workflow_id: execution.workflow_id.clone(),
+            run_id: execution.run_id.clone(),
+        }),
+        maximum_page_size: 1,
+        next_page_token: Vec::new(),
+    };
+    // A close-event request may wait on an open execution. Reverse history gives
+    // its latest available event immediately, whether it has closed or not.
+    let response = debug_log::request("GetWorkflowExecutionHistoryReverse", async {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            client
+                .clone()
+                .get_workflow_execution_history_reverse(Request::new(request)),
+        )
+        .await
+        .context("fetching latest workflow event timed out")?
+        .context("fetching latest workflow event")
+    })
+    .await?
+    .into_inner();
+    Ok(response
+        .history
+        .and_then(|history| history.events.into_iter().next()))
 }
 
 pub async fn history_page(
@@ -152,7 +176,7 @@ fn outcome(event: &HistoryEvent) -> String {
         Some(Attributes::WorkflowExecutionContinuedAsNewEventAttributes(attributes)) => {
             format!("Continued as new: {}", attributes.new_execution_run_id)
         }
-        _ => pretty(event),
+        _ => "No close event; the execution may still be running.".into(),
     }
 }
 
@@ -162,35 +186,9 @@ fn pretty(value: &impl serde::Serialize) -> String {
 }
 
 fn snapshot(response: DescribeWorkflowExecutionResponse) -> Snapshot {
-    let columns = [
-        Column::WorkflowId,
-        Column::RunId,
-        Column::WorkflowType,
-        Column::Status,
-        Column::StartTime,
-        Column::CloseTime,
-        Column::TaskQueue,
-        Column::HistoryLength,
-    ];
-    let labels = [
-        "Workflow ID",
-        "Run ID",
-        "Type",
-        "Status",
-        "Started (UTC)",
-        "Closed (UTC)",
-        "Task queue",
-        "History events",
-    ];
-    let cells = workflow::cells(
-        response.workflow_execution_info.unwrap_or_default(),
-        &columns,
-    );
-    let mut lines: Vec<_> = labels
-        .into_iter()
-        .zip(cells)
-        .map(|(label, value)| format!("{label}: {value}"))
-        .collect();
+    let mut lines = vec![workflow::overview(
+        &response.workflow_execution_info.unwrap_or_default(),
+    )];
     lines.push(format!(
         "Pending activities: {}",
         response.pending_activities.len()
