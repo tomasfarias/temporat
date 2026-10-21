@@ -20,7 +20,9 @@ pub fn save(path: &Path, name: &str, query: &str) -> Result<BTreeMap<String, Str
     };
     let source = match fs::read_to_string(&path) {
         Ok(source) => source,
-        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            include_str!("../config.example.toml").into()
+        }
         Err(error) => return Err(error).context("reading configuration to save query"),
     };
     let mut document: DocumentMut = source.parse().map_err(|error: toml_edit::TomlError| {
@@ -54,7 +56,7 @@ pub fn save(path: &Path, name: &str, query: &str) -> Result<BTreeMap<String, Str
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     fs::create_dir_all(parent).context("creating configuration directory")?;
-    // Only the on-disk TOML is edited: environment credentials never get serialized.
+    // Edit the on-disk TOML rather than serializing runtime settings or profile selection.
     let mut temporary =
         tempfile::NamedTempFile::new_in(parent).context("creating configuration temporary file")?;
     if let Ok(metadata) = fs::metadata(&path) {
@@ -100,6 +102,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("temporat/config.toml");
         assert_eq!(save(&path, "All", "").unwrap()["All"], "");
+        assert_eq!(
+            crate::config::load(Some(path.clone())).unwrap().queries["All"],
+            ""
+        );
         assert!(save(&path, " ", "query").is_err());
         for source in ["[broken", "queries = 42", "[queries]\nInvalid = 42"] {
             fs::write(&path, source).unwrap();
