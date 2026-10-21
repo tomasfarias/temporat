@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event, EventStream};
@@ -33,7 +33,9 @@ pub async fn run(
             height: size.height,
         },
     );
-    let mut effect = app::update(&mut model, Message::Action(Action::Refresh));
+    let mut effects: VecDeque<_> = app::update(&mut model, Message::Action(Action::Refresh))
+        .into_iter()
+        .collect();
     let mut client = None;
     // Dropping JoinSet cancels any pending connection/list request on quit or terminal error.
     let mut tasks = JoinSet::new();
@@ -41,8 +43,24 @@ pub async fn run(
     let mut detail_request: Option<tokio::task::AbortHandle> = None;
     let mut events = EventStream::new();
     while !model.quit {
-        if let Some(effect) = effect.take() {
+        while let Some(effect) = effects.pop_front() {
             match effect {
+                Effect::Batch(batch) => {
+                    for effect in batch.into_iter().rev() {
+                        effects.push_front(effect);
+                    }
+                }
+                Effect::Preview(request) => {
+                    if let Some(task) = detail_request.take() {
+                        task.abort();
+                    }
+                    detail_request = Some(tasks.spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                        Completed::Local(Message::PreviewReady {
+                            generation: request.generation,
+                        })
+                    }));
+                }
                 Effect::Details(request) => {
                     if let Some(task) = detail_request.take() {
                         task.abort();
@@ -112,7 +130,7 @@ pub async fn run(
                     tasks.spawn_blocking(move || {
                         let result = crate::saved_queries::save(&path, &name, &query)
                             .map_err(|error| format!("{error:#}"));
-                        Completed::Saved(Message::Query(crate::query::Message::Saved {
+                        Completed::Local(Message::Query(crate::query::Message::Saved {
                             name,
                             result,
                         }))
@@ -124,18 +142,24 @@ pub async fn run(
         let message = tokio::select! {
             event = events.next() => match event.context("terminal event stream closed")?? {
                 Event::Key(key) if model.error.is_some() => input::error_message(&config.keybindings, key),
-                Event::Key(key) if model.details.is_some() => input::details_message(&config.keybindings, key),
+                Event::Key(key) if model.details_focused => input::details_message(&config.keybindings, key),
                 Event::Key(key) => input::message(&config.keybindings, &model.query, key),
                 Event::Mouse(event) if model.error.is_some() => match event.kind {
                     crossterm::event::MouseEventKind::ScrollUp => Some(Message::Error(crate::error_popup::Message::Scroll(-3))),
                     crossterm::event::MouseEventKind::ScrollDown => Some(Message::Error(crate::error_popup::Message::Scroll(3))),
                     _ => None,
                 },
-                Event::Mouse(event) if model.details.is_none() => {
+                Event::Mouse(event) if model.query.dialog.is_none() => {
                     let size = terminal.size()?;
-                    input::mouse(&model.query, event, view::areas(ratatui::layout::Rect::new(0, 0, size.width, size.height))[1])
+                    let (table, details) = crate::layout::panes(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+                    if details.is_some_and(|area| area.contains((event.column, event.row).into())) {
+                        (event.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left))
+                            .then_some(Message::Action(Action::OpenDetails))
+                    } else if details.is_some() || !model.details_focused {
+                        input::mouse(&model.query, event, view::areas(table)[1])
+                    } else { None }
                 },
-                Event::Paste(text) if model.error.is_none() && model.details.is_none() && model.query.editing() => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
+                Event::Paste(text) if model.error.is_none() && !model.details_focused && model.query.editing() => Some(Message::Query(crate::query::Message::Edit(crate::text_input::Edit::Insert(text)))),
                 Event::Resize(width, height) => Some(Message::Resize { width, height }),
                 _ => None,
             },
@@ -143,13 +167,13 @@ pub async fn run(
                 let result = result.context("request task missing")?;
                 if result.as_ref().is_err_and(|error| error.is_cancelled()) { continue; }
                 match result.context("request task failed")? {
-                    Completed::Page(connection, message) => { client = connection; Some(message) }
-                    Completed::Saved(message) => Some(message),
+                    Completed::Page(connection, message) => { if connection.is_some() { client = connection; } Some(message) }
+                    Completed::Local(message) => Some(message),
                 }
             }
         };
         if let Some(message) = message {
-            effect = app::update(&mut model, message);
+            effects.extend(app::update(&mut model, message));
             if model.details.is_none()
                 && let Some(task) = detail_request.take()
             {
@@ -174,7 +198,7 @@ impl Drop for InputMode {
 
 enum Completed {
     Page(Option<Client>, Message),
-    Saved(Message),
+    Local(Message),
 }
 
 async fn load(
@@ -199,9 +223,6 @@ async fn load(
         .await
     }
     .await;
-    if result.is_err() {
-        client = None;
-    }
     (
         client,
         Message::Loaded {

@@ -20,6 +20,7 @@ pub struct Execution {
 pub struct WorkflowRow {
     pub execution: Option<Execution>,
     pub cells: Vec<String>,
+    pub overview: String,
 }
 
 impl WorkflowRow {
@@ -34,9 +35,39 @@ impl WorkflowRow {
             });
         Self {
             execution,
+            overview: overview(&info),
             cells: cells(info, columns),
         }
     }
+}
+
+pub fn overview(info: &WorkflowExecutionInfo) -> String {
+    let columns = [
+        Column::WorkflowId,
+        Column::RunId,
+        Column::WorkflowType,
+        Column::Status,
+        Column::StartTime,
+        Column::CloseTime,
+        Column::TaskQueue,
+        Column::HistoryLength,
+    ];
+    let labels = [
+        "Workflow ID",
+        "Run ID",
+        "Type",
+        "Status",
+        "Started (UTC)",
+        "Closed (UTC)",
+        "Task queue",
+        "History events",
+    ];
+    labels
+        .into_iter()
+        .zip(cells(info.clone(), &columns))
+        .map(|(label, value)| format!("{label}: {value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // Keep SDK types at the boundary. The UI receives only the requested display cells.
@@ -153,6 +184,8 @@ mod tests {
             &[Column::Status],
         );
         assert_eq!(row.cells.len(), 1);
+        assert!(row.overview.contains("Workflow ID: order"));
+        assert!(row.overview.contains("Run ID: older-run"));
         assert_eq!(
             row.execution.unwrap(),
             Execution {

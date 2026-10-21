@@ -46,16 +46,33 @@ pub fn areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 4] {
 pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     let palette = config.theme.palette();
     frame.render_widget(Block::default().style(palette.base()), frame.area());
-    if let Some(details) = &model.details {
-        crate::details_view::view(frame, details, &config.keybindings, &palette);
+    let (table_area, detail_area) = crate::layout::panes(frame.area());
+    if detail_area.is_none()
+        && model.details_focused
+        && let Some(details) = &model.details
+    {
+        crate::details_view::view(
+            frame,
+            details,
+            &config.keybindings,
+            &palette,
+            frame.area(),
+            true,
+        );
         if let Some(error) = &model.error {
             crate::error_popup::view(frame, error, &config.keybindings, &palette);
         }
         return;
     }
-    let [status, query, body, help] = areas(frame.area());
-    let editing = model.query.focus == crate::query::Focus::Input;
-    crate::query_view::bar(frame, &model.query, query, model.error.is_none(), &palette);
+    let [status, query, body, help] = areas(table_area);
+    let editing = !model.details_focused && model.query.focus == crate::query::Focus::Input;
+    crate::query_view::bar(
+        frame,
+        &model.query,
+        query,
+        model.error.is_none() && !model.details_focused,
+        &palette,
+    );
     frame.render_widget(
         Paragraph::new(format!(
             "{} | {}",
@@ -109,7 +126,12 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         .style(palette.heading()),
     )
     .style(palette.base())
-    .block(palette.block().title("Workflows"));
+    .block(
+        palette
+            .block()
+            .border_style(palette.border(!model.details_focused && !editing))
+            .title("Workflows"),
+    );
     // Widget state is local: rendering never changes the application model.
     let mut state = TableState::default()
         .with_selected((!model.rows.is_empty()).then_some(model.selected - model.row_offset));
@@ -139,6 +161,25 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         .style(palette.muted()),
         help,
     );
+    if let Some(area) = detail_area {
+        if let Some(details) = &model.details {
+            crate::details_view::view(
+                frame,
+                details,
+                &config.keybindings,
+                &palette,
+                area,
+                model.details_focused,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new("Select a workflow to preview its execution.")
+                    .style(palette.muted())
+                    .block(palette.block().title("Execution details")),
+                area,
+            );
+        }
+    }
     if let Some(error) = &model.error {
         crate::error_popup::view(frame, error, &config.keybindings, &palette);
     } else {
@@ -289,5 +330,43 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| view(frame, &model, &config)).unwrap();
         }
+    }
+
+    #[test]
+    fn wide_preview_stays_in_the_right_pane_and_keeps_query_controls_on_the_left() {
+        let mut config = Config::default();
+        config.table.columns = vec![Column::WorkflowId, Column::Status];
+        let mut model = Model::new(&config, false);
+        model.rows = vec![crate::workflow::WorkflowRow {
+            execution: Some(crate::workflow::Execution {
+                workflow_id: "preview-order".into(),
+                run_id: "exact-run".into(),
+            }),
+            cells: vec!["preview-order".into(), "Running".into()],
+            overview: "Workflow ID: preview-order\nStatus: Running".into(),
+        }];
+        crate::app::update(
+            &mut model,
+            crate::app::Message::Resize {
+                width: 160,
+                height: 24,
+            },
+        );
+        let mut terminal = Terminal::new(TestBackend::new(160, 24)).unwrap();
+        terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+        let (left, right) = crate::layout::panes(ratatui::layout::Rect::new(0, 0, 160, 24));
+        let right = right.unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |area: ratatui::layout::Rect, y| {
+            (area.x..area.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        assert!(row(left, 1).contains("Query"));
+        assert!(row(left, 2).contains("Clear"));
+        assert!(row(left, 6).contains("preview-order"));
+        assert!(row(right, 3).contains("Workflow ID: preview-order"));
+        assert!(row(right, 23).contains("Enter focuses details"));
+        assert_eq!(buffer[(left.right(), 6)].symbol(), " ");
     }
 }

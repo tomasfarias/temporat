@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::{
     config::{Column, Config},
     details, error_popup,
@@ -18,8 +20,11 @@ pub struct Model {
     pub quit: bool,
     pub query: QueryBar,
     pub details: Option<details::Model>,
+    pub details_focused: bool,
     pub error: Option<error_popup::Popup>,
     detail_generation: u64,
+    preview_pending: bool,
+    overview_cache: VecDeque<(crate::workflow::Execution, details::Snapshot)>,
     width: u16,
     height: u16,
     generation: u64,
@@ -38,6 +43,9 @@ pub enum Message {
         height: u16,
     },
     Details(details::Message),
+    PreviewReady {
+        generation: u64,
+    },
     Error(error_popup::Message),
     Loaded {
         generation: u64,
@@ -48,6 +56,8 @@ pub enum Message {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
+    Batch(Vec<Effect>),
+    Preview(details::Request),
     Details(details::Request),
     CancelDetails,
     SaveQuery {
@@ -101,8 +111,11 @@ impl Model {
             quit: false,
             query: QueryBar::new(config.initial_query(), config.queries.clone()),
             details: None,
+            details_focused: false,
             error: None,
             detail_generation: 0,
+            preview_pending: false,
+            overview_cache: VecDeque::new(),
             width: 80,
             height: 24,
             generation: 0,
@@ -114,15 +127,119 @@ impl Model {
             desired_rows: 1,
         }
     }
+
+    pub fn split(&self) -> bool {
+        crate::layout::panes(self.area()).1.is_some()
+    }
+
+    fn area(&self) -> ratatui::layout::Rect {
+        ratatui::layout::Rect::new(0, 0, self.width, self.height)
+    }
+
+    fn detail_area(&self) -> ratatui::layout::Rect {
+        crate::layout::panes(self.area()).1.unwrap_or(self.area())
+    }
+
+    fn cache_overview(
+        &mut self,
+        execution: crate::workflow::Execution,
+        snapshot: details::Snapshot,
+    ) {
+        self.overview_cache
+            .retain(|(cached, _)| cached != &execution);
+        self.overview_cache.push_front((execution, snapshot));
+        self.overview_cache.truncate(32);
+    }
+
+    fn open_details(
+        &mut self,
+        execution: crate::workflow::Execution,
+        overview: String,
+    ) -> details::Request {
+        self.detail_generation += 1;
+        let request = details::Request {
+            generation: self.detail_generation,
+            execution,
+            kind: details::Kind::Overview,
+        };
+        let area = self.detail_area();
+        let mut detail = details::Model::new(request.clone(), area.width, area.height);
+        detail.snapshot = self
+            .overview_cache
+            .iter()
+            .find(|(cached, _)| cached == &request.execution)
+            .map(|(_, snapshot)| snapshot.clone())
+            .or_else(|| (!overview.is_empty()).then_some(details::Snapshot { overview }));
+        if detail.snapshot.is_some() {
+            detail.status = "Cached metadata · refreshing…".into();
+        }
+        self.details = Some(detail);
+        request
+    }
 }
 
 pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
+    let effect = update_inner(model, message);
+    combine(effect, sync_preview(model))
+}
+
+fn combine(first: Option<Effect>, second: Option<Effect>) -> Option<Effect> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(Effect::Batch(vec![first, second])),
+        (first, second) => first.or(second),
+    }
+}
+
+fn sync_preview(model: &mut Model) -> Option<Effect> {
+    if model.quit {
+        return None;
+    }
+    if !model.split() {
+        if !model.details_focused && model.details.take().is_some() {
+            model.preview_pending = false;
+            return Some(Effect::CancelDetails);
+        }
+        return None;
+    }
+    let row = model.rows.get(model.selected);
+    let execution = row.and_then(|row| row.execution.clone());
+    if model
+        .details
+        .as_ref()
+        .map(|detail| &detail.request.execution)
+        == execution.as_ref()
+    {
+        return None;
+    }
+    let Some(execution) = execution else {
+        model.details = None;
+        model.details_focused = false;
+        model.preview_pending = false;
+        return Some(Effect::CancelDetails);
+    };
+    let overview = row.unwrap().overview.clone();
+    let request = model.open_details(execution, overview);
+    model.preview_pending = true;
+    Some(Effect::Preview(request))
+}
+
+fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
     let mut detail_effect = None;
     let previous_visible_rows = model.visible_rows;
     let scrolling_down = matches!(&message, Message::Action(Action::Down));
     let resizing = matches!(&message, Message::Resize { .. });
     let received_page = matches!(&message, Message::Loaded { .. });
     match message {
+        Message::PreviewReady { generation } => {
+            if model.preview_pending
+                && let Some(detail) = &model.details
+                && detail.request.generation == generation
+            {
+                model.preview_pending = false;
+                return Some(Effect::Details(detail.request.clone()));
+            }
+            return None;
+        }
         Message::Error(error_popup::Message::Close) => {
             model.error = None;
             return None;
@@ -141,31 +258,44 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             return None;
         }
         Message::Action(Action::OpenDetails) => {
+            if let Some(detail) = &model.details {
+                model.details_focused = true;
+                if model.preview_pending {
+                    model.preview_pending = false;
+                    return Some(Effect::Details(detail.request.clone()));
+                }
+                return None;
+            }
             if let Some(execution) = model
                 .rows
                 .get(model.selected)
                 .and_then(|row| row.execution.clone())
             {
-                model.detail_generation += 1;
-                let request = details::Request {
-                    generation: model.detail_generation,
-                    execution,
-                    kind: details::Kind::Overview,
-                };
-                model.details = Some(details::Model::new(
-                    request.clone(),
-                    model.width,
-                    model.height,
-                ));
+                model.details_focused = true;
+                let overview = model.rows[model.selected].overview.clone();
+                let request = model.open_details(execution, overview);
                 return Some(Effect::Details(request));
             }
         }
         Message::Action(Action::Back) => {}
         Message::Details(message) => {
+            if let details::Message::Loaded {
+                generation,
+                result: Ok(details::Content::Overview(snapshot)),
+            } = &message
+                && let Some(detail) = &model.details
+                && *generation == detail.request.generation
+            {
+                model.cache_overview(detail.request.execution.clone(), snapshot.clone());
+            }
             if let Some(details) = &mut model.details {
                 match details::update(details, message) {
                     Some(details::Command::Load(request)) => return Some(Effect::Details(request)),
                     Some(details::Command::Close) => {
+                        model.details_focused = false;
+                        if model.split() {
+                            return None;
+                        }
                         model.details = None;
                         if model.rows.len() < model.desired_rows
                             && !model.next_page_token.is_empty()
@@ -195,6 +325,15 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             query::update(&mut model.query, query::Message::Focus(query::Focus::Input));
         }
         Message::Query(message) => {
+            if matches!(
+                &message,
+                query::Message::Focus(_)
+                    | query::Message::OpenLoad
+                    | query::Message::OpenSave
+                    | query::Message::Clear
+            ) {
+                model.details_focused = false;
+            }
             let previous_query = model.query.applied.clone();
             match query::update(&mut model.query, message) {
                 Some(query::Command::Save { name, query }) => {
@@ -224,6 +363,7 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
             model.width = width;
             model.height = height;
             model.visible_rows = usize::from(height.saturating_sub(8)).max(1);
+            let detail_area = model.detail_area();
             if let Some(error) = &mut model.error {
                 error.scroll(
                     error_popup::Message::Scroll(0),
@@ -231,8 +371,13 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
                 );
             }
             if let Some(details) = &mut model.details
-                && let Some(details::Command::Load(request)) =
-                    details::update(details, details::Message::Resize { width, height })
+                && let Some(details::Command::Load(request)) = details::update(
+                    details,
+                    details::Message::Resize {
+                        width: detail_area.width,
+                        height: detail_area.height,
+                    },
+                )
             {
                 detail_effect = Some(Effect::Details(request));
             }
@@ -304,12 +449,12 @@ pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
         model.desired_rows = model.row_offset + model.visible_rows;
     }
     if (scrolling_down || (resizing && model.visible_rows > previous_visible_rows) || received_page)
-        && model.details.is_none()
+        && (model.split() || !model.details_focused)
         && model.error.is_none()
         && model.rows.len() < model.desired_rows
         && !model.next_page_token.is_empty()
     {
-        return begin_load(model, LoadKind::Append);
+        return combine(begin_load(model, LoadKind::Append), detail_effect);
     }
     detail_effect
 }
@@ -372,6 +517,7 @@ mod tests {
             WorkflowRow {
                 execution: Some(execution.clone()),
                 cells: vec!["Running".into()],
+                ..Default::default()
             },
         ];
         model.selected = 1;
@@ -449,6 +595,7 @@ mod tests {
             },
         );
         model.details = Some(detail);
+        model.details_focused = true;
         assert!(
             matches!(update(&mut model, Message::Resize { width: 80, height: 20 }), Some(Effect::Details(details::Request { kind: details::Kind::History { token }, .. })) if token == [42])
         );
@@ -777,5 +924,184 @@ mod tests {
         assert!(model.rows.is_empty());
         assert!(model.next_page_token.is_empty());
         assert_eq!(model.query.applied, "WorkflowId = 'missing'");
+    }
+
+    fn preview_rows() -> Vec<WorkflowRow> {
+        ["first-run", "second-run"]
+            .into_iter()
+            .map(|run| WorkflowRow {
+                execution: Some(crate::workflow::Execution {
+                    workflow_id: "same-workflow".into(),
+                    run_id: run.into(),
+                }),
+                cells: vec![run.into()],
+                overview: format!("Run ID: {run}\nStatus: Running"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn automatic_preview_debounces_exact_runs_and_ignores_stale_results() {
+        let mut model = Model::new(&Config::default(), false);
+        model.rows = preview_rows();
+        assert!(matches!(
+            update(
+                &mut model,
+                Message::Resize {
+                    width: 160,
+                    height: 24
+                }
+            ),
+            Some(Effect::Preview(details::Request { generation: 1, .. }))
+        ));
+        assert!(!model.details_focused);
+        assert!(model.details.as_ref().unwrap().text().contains("first-run"));
+        assert!(matches!(
+            update(&mut model, Message::PreviewReady { generation: 1 }),
+            Some(Effect::Details(_))
+        ));
+        update(
+            &mut model,
+            Message::Details(details::Message::Loaded {
+                generation: 1,
+                result: Ok(details::Content::Overview(details::Snapshot {
+                    overview: "cached first run".into(),
+                })),
+            }),
+        );
+        assert!(matches!(
+            update(&mut model, Message::Action(Action::Down)),
+            Some(Effect::Preview(details::Request { generation: 2, .. }))
+        ));
+        assert_eq!(
+            model.details.as_ref().unwrap().request.execution.run_id,
+            "second-run"
+        );
+        assert!(update(&mut model, Message::PreviewReady { generation: 1 }).is_none());
+        update(
+            &mut model,
+            Message::Details(details::Message::Loaded {
+                generation: 1,
+                result: Err("stale failure".into()),
+            }),
+        );
+        assert!(!model.details.as_ref().unwrap().status.contains("stale"));
+        // Enter starts the selected preview immediately, without waiting for the timer.
+        assert!(matches!(
+            update(&mut model, Message::Action(Action::OpenDetails)),
+            Some(Effect::Details(details::Request { generation: 2, .. }))
+        ));
+        assert!(model.details_focused);
+        assert!(update(&mut model, Message::PreviewReady { generation: 2 }).is_none());
+        update(
+            &mut model,
+            Message::Details(details::Message::Action(Action::Back)),
+        );
+        assert!(!model.details_focused);
+        assert!(model.details.is_some());
+        update(&mut model, Message::Action(Action::Up));
+        assert_eq!(model.details.as_ref().unwrap().text(), "cached first run");
+        update(
+            &mut model,
+            Message::Details(details::Message::Loaded {
+                generation: 2,
+                result: Ok(details::Content::Overview(details::Snapshot {
+                    overview: "late second run".into(),
+                })),
+            }),
+        );
+        assert_eq!(model.details.as_ref().unwrap().text(), "cached first run");
+    }
+
+    #[test]
+    fn table_prefetch_and_preview_are_scheduled_together() {
+        let mut model = Model::new(&Config::default(), false);
+        update(
+            &mut model,
+            Message::Resize {
+                width: 160,
+                height: 10,
+            },
+        );
+        update(&mut model, Message::Action(Action::Refresh));
+        update(
+            &mut model,
+            Message::Loaded {
+                generation: 0,
+                result: Ok(Page {
+                    rows: preview_rows(),
+                    next_page_token: vec![42],
+                }),
+            },
+        );
+        let Some(Effect::Batch(effects)) = update(&mut model, Message::Action(Action::Down)) else {
+            panic!("expected table and preview effects")
+        };
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadPage { token, .. } if token == &[42]))
+        );
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Preview(details::Request { generation: 2, .. })
+        )));
+    }
+
+    #[test]
+    fn resizing_switches_between_preview_and_fullscreen_without_losing_focus_or_selection() {
+        let mut model = Model::new(&Config::default(), false);
+        model.rows = preview_rows();
+        model.selected = 1;
+        update(
+            &mut model,
+            Message::Resize {
+                width: 160,
+                height: 24,
+            },
+        );
+        assert_eq!(
+            update(
+                &mut model,
+                Message::Resize {
+                    width: 80,
+                    height: 24
+                }
+            ),
+            Some(Effect::CancelDetails)
+        );
+        assert!(model.details.is_none());
+        assert!(update(&mut model, Message::PreviewReady { generation: 1 }).is_none());
+        update(&mut model, Message::Action(Action::OpenDetails));
+        assert!(model.details_focused);
+        let generation = model.details.as_ref().unwrap().request.generation;
+        update(
+            &mut model,
+            Message::Resize {
+                width: 160,
+                height: 24,
+            },
+        );
+        assert!(model.details_focused);
+        assert_eq!(
+            model.details.as_ref().unwrap().request.generation,
+            generation
+        );
+        assert!(model.details.as_ref().unwrap().width < 80);
+        update(
+            &mut model,
+            Message::Details(details::Message::Action(Action::Back)),
+        );
+        assert!(!model.details_focused);
+        assert_eq!(model.selected, 1);
+        assert!(model.details.is_some());
+        update(
+            &mut model,
+            Message::Resize {
+                width: 80,
+                height: 24,
+            },
+        );
+        assert!(model.details.is_none());
     }
 }

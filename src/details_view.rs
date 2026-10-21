@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::Style,
     text::Line,
     widgets::{List, ListItem, ListState, Paragraph, Tabs},
@@ -12,14 +12,21 @@ use crate::{
     theme::Palette,
 };
 
-pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings, palette: &Palette) {
+pub fn view(
+    frame: &mut Frame,
+    model: &Model,
+    keys: &Keybindings,
+    palette: &Palette,
+    area: Rect,
+    focused: bool,
+) {
     let [status, tabs, body, help] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area);
     let status_text = if model.tab == Tab::History {
         format!(
             "{} | {} events loaded",
@@ -48,10 +55,13 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings, palette: &Pale
             .highlight_style(palette.selected_header()),
         tabs,
     );
-    let block = palette.block().title(format!(
-        "{} · {}",
-        model.request.execution.workflow_id, model.request.execution.run_id
-    ));
+    let block = palette
+        .block()
+        .border_style(palette.border(focused))
+        .title(format!(
+            "{} · {}",
+            model.request.execution.workflow_id, model.request.execution.run_id
+        ));
     if model.tab == Tab::History && !model.event_open {
         let items = model
             .history
@@ -99,10 +109,19 @@ pub fn view(frame: &mut Frame, model: &Model, keys: &Keybindings, palette: &Pale
         );
     }
     frame.render_widget(
-        Paragraph::new(format!(
-            "{}/{} scroll  {}/{} tabs  Enter event  {} refresh  Esc back  {} quit",
-            keys.down, keys.up, keys.left, keys.right, keys.refresh, keys.quit
-        ))
+        Paragraph::new(if !focused {
+            "Enter focuses details".into()
+        } else if area.width < 100 {
+            format!(
+                "{}/{} scroll  {}/{} tabs  Enter event  Esc back",
+                keys.down, keys.up, keys.left, keys.right
+            )
+        } else {
+            format!(
+                "{}/{} scroll  {}/{} tabs  Enter event  {} refresh  Esc back  {} quit",
+                keys.down, keys.up, keys.left, keys.right, keys.refresh, keys.quit
+            )
+        })
         .style(palette.muted()),
         help,
     );
@@ -143,6 +162,8 @@ mod tests {
                         &model,
                         &Keybindings::default(),
                         &crate::theme::Theme::default().palette(),
+                        frame.area(),
+                        true,
                     )
                 })
                 .unwrap();

@@ -6,6 +6,7 @@ mod details_view;
 mod error_popup;
 mod history;
 mod input;
+mod layout;
 mod payload;
 mod query;
 mod query_view;

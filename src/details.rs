@@ -1,5 +1,6 @@
 use crate::{history, input::Action, workflow::Execution};
 
+#[derive(Clone)]
 pub struct Snapshot {
     pub overview: String,
 }
