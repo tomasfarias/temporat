@@ -113,7 +113,7 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} headers  Enter details  {} query  {} auto  {} load  {} save  {} namespaces  {} refresh  {} quit",
+            "{}/{} rows │ {}/{} headers │ Enter details │ {} query │ {} toggle auto-refresh │ {} load │ {} save │ {} namespaces │ {} refresh │ {} quit",
             self.down,
             self.up,
             self.left,

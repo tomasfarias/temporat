@@ -48,6 +48,8 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut refresh_timer = crate::refresh::timer(config.table.refresh_interval_secs);
     let mut countdown_timer = crate::refresh::timer(1);
+    let mut animation_timer = tokio::time::interval(Duration::from_millis(100));
+    animation_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     while !workspace.active.quit {
         effects.extend(profiles::update(
             &mut workspace,
@@ -211,6 +213,7 @@ pub async fn run(
         let model = &workspace.active;
         let mut prepared_client = None;
         let message = tokio::select! {
+            _ = animation_timer.tick(), if model.refreshing() => Some(Message::AnimateRefresh),
             _ = countdown_timer.tick(), if model.auto_refresh && !offline => None,
             _ = refresh_timer.tick(), if model.auto_refresh && !offline => Some(Message::AutoRefresh),
             event = events.next() => match event.context("terminal event stream closed")?? {
@@ -259,8 +262,18 @@ pub async fn run(
         if let Some(message) = message {
             let epoch = workspace.epoch;
             let auto_refresh = workspace.active.auto_refresh;
-            effects.extend(profiles::update(&mut workspace, &config, message));
-            if epoch != workspace.epoch || auto_refresh != workspace.active.auto_refresh {
+            let manual_refresh = matches!(
+                &message,
+                Message::Action(Action::Refresh)
+                    | Message::Details(crate::details::Message::Action(Action::Refresh))
+            );
+            let effect = profiles::update(&mut workspace, &config, message);
+            let reset_countdown = manual_refresh && effect.is_some();
+            effects.extend(effect);
+            if reset_countdown
+                || epoch != workspace.epoch
+                || auto_refresh != workspace.active.auto_refresh
+            {
                 refresh_timer.reset();
                 countdown_timer.reset();
             }

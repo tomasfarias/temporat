@@ -3,6 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     widgets::{Block, Cell, Paragraph, Row, Table, TableState},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::Model,
@@ -59,14 +60,13 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
             frame.area(),
             true,
         );
-        let label = model.refresh_label(config);
+        let label = model.refresh_label();
         let [_, indicator] =
-            Layout::horizontal([Constraint::Min(0), Constraint::Length(label.len() as u16)]).areas(
-                ratatui::layout::Rect {
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(label.width() as u16)])
+                .areas(ratatui::layout::Rect {
                     height: frame.area().height.min(1),
                     ..frame.area()
-                },
-            );
+                });
         frame.render_widget(Paragraph::new(label).style(palette.surface()), indicator);
         if let Some(error) = &model.error {
             crate::error_popup::view(frame, error, &config.keybindings, &palette);
@@ -74,10 +74,10 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         return;
     }
     let [status, query, body, help] = areas(table_area);
-    let label = model.refresh_label(config);
+    let label = model.refresh_label();
     let [status, indicator] = Layout::horizontal([
         Constraint::Min(0),
-        Constraint::Length(label.len() as u16 + 1),
+        Constraint::Length(label.width() as u16 + 1),
     ])
     .areas(status);
     frame.render_widget(
@@ -173,7 +173,7 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     }
     frame.render_widget(
         Paragraph::new(if editing {
-            "Enter apply  Esc cancel  Ctrl+o load  Ctrl+s save  Ctrl+u clear".into()
+            "Enter apply │ Esc cancel │ Ctrl+o load │ Ctrl+s save │ Ctrl+u clear".into()
         } else {
             config.keybindings.help()
         })

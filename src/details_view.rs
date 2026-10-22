@@ -113,13 +113,13 @@ pub fn view(
             "Enter focuses details".into()
         } else if area.width < 100 {
             format!(
-                "{}/{} scroll  {}/{} tabs  Enter event  Esc back",
+                "{}/{} scroll │ {}/{} tabs │ Enter event │ Esc back",
                 keys.down, keys.up, keys.left, keys.right
             )
         } else {
             format!(
-                "{}/{} scroll  {}/{} tabs  Enter event  {} refresh  Esc back  {} quit",
-                keys.down, keys.up, keys.left, keys.right, keys.refresh, keys.quit
+                "{}/{} scroll │ {}/{} tabs │ Enter event │ {} refresh │ {} toggle auto-refresh │ Esc back │ {} quit",
+                keys.down, keys.up, keys.left, keys.right, keys.refresh, keys.auto_refresh, keys.quit
             )
         })
         .style(palette.muted()),

@@ -25,6 +25,7 @@ pub struct Model {
     pub error: Option<error_popup::Popup>,
     pub auto_refresh: bool,
     refresh_in_secs: u64,
+    refresh_frame: usize,
     refresh_batch: Option<RefreshBatch>,
     detail_generation: u64,
     preview_pending: bool,
@@ -42,6 +43,7 @@ pub struct Model {
 }
 
 pub enum Message {
+    AnimateRefresh,
     RefreshCountdown(u64),
     AutoRefresh,
     Profiles(crate::profiles::Message),
@@ -141,6 +143,7 @@ impl Model {
             error: None,
             auto_refresh: config.table.refresh_interval_secs != 0,
             refresh_in_secs: crate::refresh::period(config.table.refresh_interval_secs).as_secs(),
+            refresh_frame: 0,
             refresh_batch: None,
             detail_generation: 0,
             preview_pending: false,
@@ -190,16 +193,23 @@ impl Model {
         self.has_cached_page
     }
 
-    pub fn refresh_label(&self, config: &Config) -> String {
+    pub fn refreshing(&self) -> bool {
+        matches!(
+            self.loading,
+            Some(LoadKind::Replace | LoadKind::Refresh { .. })
+        )
+    }
+
+    pub fn refresh_label(&self) -> String {
         if self.offline {
-            "refresh: offline".into()
+            "auto-refresh: offline".into()
+        } else if self.refreshing() {
+            let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            format!("refreshing {}", spinner[self.refresh_frame % spinner.len()])
         } else if self.auto_refresh {
-            format!(
-                "refresh in: {}s ({})",
-                self.refresh_in_secs, config.keybindings.auto_refresh
-            )
+            format!("auto-refresh: {}s", self.refresh_in_secs)
         } else {
-            format!("refresh: paused ({})", config.keybindings.auto_refresh)
+            "auto-refresh: paused".into()
         }
     }
 
@@ -382,6 +392,10 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
     let resizing = matches!(&message, Message::Resize { .. });
     let received_page = matches!(&message, Message::Loaded { .. } | Message::Resume);
     match message {
+        Message::AnimateRefresh => {
+            model.refresh_frame = (model.refresh_frame + 1) % 10;
+            return None;
+        }
         Message::RefreshCountdown(seconds) => {
             model.refresh_in_secs = seconds;
             return None;
@@ -654,6 +668,7 @@ fn begin_refresh(model: &mut Model, automatic: bool) -> Option<Effect> {
         return None;
     }
     model.generation += 1;
+    model.refresh_frame = 0;
     model.loading = Some(LoadKind::Refresh { automatic });
     model.refresh_batch = Some(RefreshBatch {
         rows: Vec::new(),
