@@ -46,10 +46,16 @@ pub async fn run(
     let mut detail_request: Option<tokio::task::AbortHandle> = None;
     let mut switch_request: Option<tokio::task::AbortHandle> = None;
     let mut events = EventStream::new();
+    let mut refresh_timer = crate::refresh::timer(config.table.refresh_interval_secs);
     while !workspace.active.quit {
         while let Some(effect) = effects.pop_front() {
             let epoch = workspace.epoch;
             match effect {
+                Effect::CancelPage => {
+                    if let Some(task) = request.take() {
+                        task.abort();
+                    }
+                }
                 Effect::PrepareProfile {
                     id,
                     name,
@@ -199,6 +205,7 @@ pub async fn run(
         let model = &workspace.active;
         let mut prepared_client = None;
         let message = tokio::select! {
+            _ = refresh_timer.tick(), if model.auto_refresh && !offline => Some(Message::AutoRefresh),
             event = events.next() => match event.context("terminal event stream closed")?? {
                 Event::Key(key) if model.error.is_some() => input::error_message(&config.keybindings, key),
                 Event::Key(key) if workspace.picker.is_some() => profiles::input(key),
@@ -244,7 +251,11 @@ pub async fn run(
         };
         if let Some(message) = message {
             let epoch = workspace.epoch;
+            let auto_refresh = workspace.active.auto_refresh;
             effects.extend(profiles::update(&mut workspace, &config, message));
+            if epoch != workspace.epoch || auto_refresh != workspace.active.auto_refresh {
+                refresh_timer.reset();
+            }
             if epoch != workspace.epoch {
                 if let Some(task) = request.take() {
                     task.abort();

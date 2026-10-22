@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::{
     config::{Column, Config},
@@ -23,6 +23,8 @@ pub struct Model {
     pub details: Option<details::Model>,
     pub details_focused: bool,
     pub error: Option<error_popup::Popup>,
+    pub auto_refresh: bool,
+    refresh_batch: Option<RefreshBatch>,
     detail_generation: u64,
     preview_pending: bool,
     overview_cache: VecDeque<(crate::workflow::Execution, details::Snapshot)>,
@@ -39,6 +41,7 @@ pub struct Model {
 }
 
 pub enum Message {
+    AutoRefresh,
     Profiles(crate::profiles::Message),
     Resume,
     Action(Action),
@@ -71,6 +74,7 @@ pub enum Effect {
     Preview(details::Request),
     Details(details::Request),
     CancelDetails,
+    CancelPage,
     SaveQuery {
         name: String,
         query: String,
@@ -87,6 +91,13 @@ pub enum Effect {
 enum LoadKind {
     Replace,
     Append,
+    Automatic,
+}
+
+struct RefreshBatch {
+    rows: Vec<WorkflowRow>,
+    tokens: HashSet<Vec<u8>>,
+    target_rows: usize,
 }
 
 impl Model {
@@ -126,6 +137,8 @@ impl Model {
             details: None,
             details_focused: false,
             error: None,
+            auto_refresh: config.table.refresh_interval_secs != 0,
+            refresh_batch: None,
             detail_generation: 0,
             preview_pending: false,
             overview_cache: VecDeque::new(),
@@ -148,6 +161,7 @@ impl Model {
 
     pub fn suspend(&mut self) {
         self.generation += 1;
+        self.refresh_batch = None;
         if self.loading.take().is_some() {
             self.status = format!("{} cached workflows", self.rows.len());
         }
@@ -171,6 +185,110 @@ impl Model {
 
     pub fn has_cached_page(&self) -> bool {
         self.has_cached_page
+    }
+
+    pub fn refresh_label(&self, config: &Config) -> String {
+        if self.offline {
+            "auto: offline".into()
+        } else if self.auto_refresh {
+            format!(
+                "auto: {}s ({})",
+                crate::refresh::period(config.table.refresh_interval_secs).as_secs(),
+                config.keybindings.auto_refresh
+            )
+        } else {
+            format!("auto: paused ({})", config.keybindings.auto_refresh)
+        }
+    }
+
+    fn cancel_auto_refresh(&mut self) -> bool {
+        if !matches!(self.loading, Some(LoadKind::Automatic)) {
+            return false;
+        }
+        self.generation += 1;
+        self.loading = None;
+        self.refresh_batch = None;
+        self.status = format!("{} cached workflows", self.rows.len());
+        true
+    }
+
+    fn page_request(&self, token: Vec<u8>, query: String) -> Effect {
+        Effect::LoadPage {
+            token,
+            query,
+            generation: self.generation,
+            page_size: self
+                .page_size
+                .unwrap_or(self.visible_rows.clamp(1, 1000) as u16),
+        }
+    }
+
+    fn refresh_failed(&mut self, error: String) {
+        self.refresh_batch = None;
+        self.status = format!("Error: automatic refresh failed: {error}");
+    }
+
+    fn refreshed_page(&mut self, result: Result<Page, String>) -> Option<Effect> {
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                self.refresh_failed(error);
+                return None;
+            }
+        };
+        let batch = self.refresh_batch.as_mut()?;
+        if !page.next_page_token.is_empty() && !batch.tokens.insert(page.next_page_token.clone()) {
+            self.refresh_failed("workflow pagination made no progress".into());
+            return None;
+        }
+        batch.rows.extend(page.rows);
+        let screen_row = self
+            .selected
+            .saturating_sub(self.row_offset)
+            .min(self.visible_rows.saturating_sub(1));
+        let execution = self
+            .rows
+            .get(self.selected)
+            .and_then(|row| row.execution.as_ref());
+        let selected = execution.and_then(|execution| {
+            batch
+                .rows
+                .iter()
+                .position(|row| row.execution.as_ref() == Some(execution))
+        });
+        let viewport_end =
+            selected.unwrap_or(self.selected).saturating_sub(screen_row) + self.visible_rows;
+        let required_rows = batch.target_rows.max(self.desired_rows).max(viewport_end);
+        if batch.rows.len() < required_rows && !page.next_page_token.is_empty() {
+            self.loading = Some(LoadKind::Automatic);
+            return Some(self.page_request(page.next_page_token, self.query.applied.clone()));
+        }
+        // Commit only a complete replacement window. The old rows and pagination
+        // token stay usable if any page fails or the user cancels the refresh.
+        let batch = self.refresh_batch.take().unwrap();
+        self.selected = selected
+            .unwrap_or(self.selected)
+            .min(batch.rows.len().saturating_sub(1));
+        self.row_offset = self.selected.saturating_sub(screen_row);
+        self.desired_rows = self.row_offset + self.visible_rows;
+        self.rows = batch.rows;
+        self.next_page_token = page.next_page_token;
+        self.has_cached_page = true;
+        self.status = format!(
+            "{} workflows{}",
+            self.rows.len(),
+            if self.next_page_token.is_empty() {
+                ""
+            } else {
+                " · more rows available"
+            }
+        );
+        self.overview_cache.clear();
+        if !self.details_focused {
+            self.details = None;
+            self.preview_pending = false;
+        }
+        None
     }
 
     fn area(&self) -> ratatui::layout::Rect {
@@ -271,6 +389,34 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
     let resizing = matches!(&message, Message::Resize { .. });
     let received_page = matches!(&message, Message::Loaded { .. } | Message::Resume);
     match message {
+        Message::AutoRefresh => {
+            if !model.auto_refresh
+                || model.offline
+                || model.loading.is_some()
+                || model.query.focus != query::Focus::Table
+                || model.query.dialog.is_some()
+                || model.error.is_some()
+                || (model.details_focused && !model.split())
+            {
+                return None;
+            }
+            model.generation += 1;
+            model.loading = Some(LoadKind::Automatic);
+            model.refresh_batch = Some(RefreshBatch {
+                rows: Vec::new(),
+                tokens: HashSet::new(),
+                target_rows: model.rows.len().max(model.visible_rows),
+            });
+            model.status = "Refreshing workflows…".into();
+            return Some(model.page_request(Vec::new(), model.query.applied.clone()));
+        }
+        Message::Action(Action::ToggleAutoRefresh) => {
+            model.auto_refresh = !model.auto_refresh;
+            if !model.auto_refresh && model.cancel_auto_refresh() {
+                return Some(Effect::CancelPage);
+            }
+            return None;
+        }
         Message::Profiles(_) | Message::Action(Action::Profiles) => return None,
         Message::Resume => {}
         Message::PreviewReady { generation } => {
@@ -363,7 +509,10 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
             model.selected_column =
                 (model.selected_column + 1).min(model.columns.len().saturating_sub(1))
         }
-        Message::Action(Action::Refresh) => return begin_load(model, LoadKind::Replace),
+        Message::Action(Action::Refresh) => {
+            model.cancel_auto_refresh();
+            return begin_load(model, LoadKind::Replace);
+        }
         Message::Action(Action::Query) => {
             query::update(&mut model.query, query::Message::Focus(query::Focus::Input));
         }
@@ -387,6 +536,7 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
                     // the replacement succeeds. Its pagination token belongs to applied.
                     model.generation += 1;
                     model.loading = None;
+                    model.refresh_batch = None;
                     if !model.offline {
                         model.pending_query =
                             Some(std::mem::replace(&mut model.query.applied, previous_query));
@@ -430,6 +580,9 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
                 return None;
             }
             let kind = model.loading.take()?;
+            if matches!(kind, LoadKind::Automatic) {
+                return model.refreshed_page(result);
+            }
             match result {
                 Ok(page) => {
                     if matches!(kind, LoadKind::Append)
@@ -454,6 +607,7 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
                         LoadKind::Append => {
                             model.rows.extend(page.rows);
                         }
+                        LoadKind::Automatic => unreachable!("handled above"),
                     }
                     model.next_page_token = page.next_page_token;
                     model.has_cached_page = true;
@@ -509,29 +663,335 @@ fn begin_load(model: &mut Model, kind: LoadKind) -> Option<Effect> {
         return None;
     }
     let token = match kind {
-        LoadKind::Replace => Vec::new(),
+        LoadKind::Replace | LoadKind::Automatic => Vec::new(),
         LoadKind::Append => model.next_page_token.clone(),
     };
     let query = match kind {
         LoadKind::Replace => model.pending_query.as_ref().unwrap_or(&model.query.applied),
-        LoadKind::Append => &model.query.applied,
+        LoadKind::Append | LoadKind::Automatic => &model.query.applied,
     }
     .clone();
     model.loading = Some(kind);
     model.status = "Loading workflows…".into();
-    Some(Effect::LoadPage {
-        token,
-        query,
-        generation: model.generation,
-        page_size: model
-            .page_size
-            .unwrap_or(model.visible_rows.clamp(1, 1000) as u16),
-    })
+    Some(model.page_request(token, query))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn refresh_rows(count: usize) -> Vec<WorkflowRow> {
+        (0..count)
+            .map(|index| WorkflowRow {
+                execution: Some(crate::workflow::Execution {
+                    workflow_id: format!("workflow-{index}"),
+                    run_id: format!("run-{index}"),
+                }),
+                cells: vec![index.to_string()],
+                overview: format!("metadata-{index}"),
+            })
+            .collect()
+    }
+
+    fn automatic(model: &mut Model) -> u64 {
+        let Some(Effect::LoadPage {
+            generation,
+            token,
+            query,
+            ..
+        }) = update(model, Message::AutoRefresh)
+        else {
+            panic!("expected automatic refresh")
+        };
+        assert!(token.is_empty());
+        assert_eq!(query, model.query.applied);
+        generation
+    }
+
+    #[test]
+    fn automatic_refresh_commits_all_pages_atomically_and_anchors_current_selection() {
+        let mut model = Model::new(&Config::default(), false);
+        update(&mut model, resize(4));
+        model.rows = refresh_rows(8);
+        model.selected = 5;
+        model.row_offset = 3;
+        model.selected_column = 2;
+        model.query.applied = "WorkflowType = 'Order'".into();
+        model.query.input = crate::text_input::TextInput::new("unapplied draft");
+        let generation = automatic(&mut model);
+        assert!(update(&mut model, Message::AutoRefresh).is_none());
+        let mut first = refresh_rows(2);
+        first[0].execution.as_mut().unwrap().run_id = "new run".into();
+        assert!(
+            matches!(update(&mut model, Message::Loaded { generation, result: Ok(Page { rows: first, next_page_token: vec![1] }) }), Some(Effect::LoadPage { token, .. }) if token == [1])
+        );
+        assert_eq!(model.rows.len(), 8);
+        assert_eq!(model.rows[0].execution.as_ref().unwrap().run_id, "run-0");
+        // The user may navigate while the replacement is loading.
+        update(&mut model, Message::Action(Action::Down));
+        let screen_row = model.selected - model.row_offset;
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: refresh_rows(8),
+                    next_page_token: vec![2],
+                }),
+            },
+        );
+        assert_eq!(model.rows.len(), 10);
+        assert_eq!(model.selected, 8);
+        assert_eq!(model.selected - model.row_offset, screen_row);
+        assert_eq!(
+            model.rows[model.selected]
+                .execution
+                .as_ref()
+                .unwrap()
+                .run_id,
+            "run-6"
+        );
+        assert_eq!(model.selected_column, 2);
+        assert_eq!(model.query.input.text, "unapplied draft");
+        assert_eq!(model.query.applied, "WorkflowType = 'Order'");
+        assert_eq!(model.next_page_token, [2]);
+    }
+
+    #[test]
+    fn automatic_refresh_fills_the_shifted_viewport_before_committing() {
+        let mut model = Model::new(&Config::default(), false);
+        update(&mut model, resize(4));
+        model.rows = refresh_rows(4);
+        model.selected = 1;
+        let generation = automatic(&mut model);
+        let mut rows = refresh_rows(1);
+        rows[0].execution.as_mut().unwrap().run_id = "new run".into();
+        rows.extend(refresh_rows(3));
+        assert!(matches!(
+            update(
+                &mut model,
+                Message::Loaded {
+                    generation,
+                    result: Ok(Page {
+                        rows,
+                        next_page_token: vec![1]
+                    })
+                }
+            ),
+            Some(Effect::LoadPage { .. })
+        ));
+        assert_eq!(model.rows.len(), 4);
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: refresh_rows(4).into_iter().skip(3).collect(),
+                    next_page_token: Vec::new(),
+                }),
+            },
+        );
+        assert_eq!(
+            (model.selected, model.row_offset, model.rows.len()),
+            (2, 1, 5)
+        );
+        assert_eq!(model.rows.len() - model.row_offset, model.visible_rows);
+    }
+
+    #[test]
+    fn automatic_refresh_clamps_missing_exact_runs_and_empty_results() {
+        let mut model = Model::new(&Config::default(), false);
+        model.rows = refresh_rows(4);
+        model.selected = 2;
+        model.row_offset = 1;
+        let generation = automatic(&mut model);
+        let mut rows = refresh_rows(2);
+        rows[0].execution.as_mut().unwrap().workflow_id = "workflow-2".into();
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows,
+                    next_page_token: Vec::new(),
+                }),
+            },
+        );
+        assert_eq!(model.selected, 1); // Same workflow ID with another run is not the selected execution.
+        let generation = automatic(&mut model);
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: Vec::new(),
+                    next_page_token: Vec::new(),
+                }),
+            },
+        );
+        assert!(model.rows.is_empty());
+        assert_eq!((model.selected, model.row_offset), (0, 0));
+    }
+
+    #[test]
+    fn automatic_failure_retains_cache_and_pagination_without_a_popup_and_can_retry() {
+        let mut model = Model::new(&Config::default(), false);
+        update(&mut model, resize(4));
+        model.rows = refresh_rows(4);
+        model.selected = 1;
+        model.next_page_token = vec![42];
+        let generation = automatic(&mut model);
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: refresh_rows(1),
+                    next_page_token: vec![2],
+                }),
+            },
+        );
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Err("unavailable".into()),
+            },
+        );
+        assert!(model.error.is_none());
+        assert!(model.status.contains("automatic refresh failed"));
+        assert_eq!(model.rows.len(), 4);
+        assert_eq!(model.selected, 1);
+        assert_eq!(model.next_page_token, [42]);
+        let generation = automatic(&mut model);
+        // Repeated page tokens must fail atomically too, including empty-page cycles.
+        for token in [vec![1], vec![2], vec![1]] {
+            update(
+                &mut model,
+                Message::Loaded {
+                    generation,
+                    result: Ok(Page {
+                        rows: Vec::new(),
+                        next_page_token: token,
+                    }),
+                },
+            );
+        }
+        assert!(model.status.contains("pagination made no progress"));
+        assert!(model.error.is_none());
+        assert!(
+            matches!(update(&mut model, Message::Action(Action::Down)), Some(Effect::LoadPage { token, .. }) if token == [42])
+        );
+    }
+
+    #[test]
+    fn pausing_cancels_inflight_refresh_and_manual_refresh_works_while_paused() {
+        let mut model = Model::new(&Config::default(), false);
+        model.rows = refresh_rows(3);
+        let generation = automatic(&mut model);
+        assert_eq!(
+            update(&mut model, Message::Action(Action::ToggleAutoRefresh)),
+            Some(Effect::CancelPage)
+        );
+        assert!(!model.auto_refresh);
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: Vec::new(),
+                    next_page_token: Vec::new(),
+                }),
+            },
+        );
+        assert_eq!(model.rows.len(), 3);
+        assert!(update(&mut model, Message::AutoRefresh).is_none());
+        let Some(Effect::LoadPage { generation, .. }) =
+            update(&mut model, Message::Action(Action::Refresh))
+        else {
+            panic!()
+        };
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: refresh_rows(1),
+                    next_page_token: Vec::new(),
+                }),
+            },
+        );
+        assert_eq!(model.rows.len(), 1);
+        update(&mut model, Message::Action(Action::ToggleAutoRefresh));
+        assert!(model.auto_refresh);
+        automatic(&mut model);
+    }
+
+    #[test]
+    fn polling_skips_editing_dialogs_errors_offline_and_superseded_queries() {
+        let mut model = Model::new(&Config::default(), false);
+        model.rows = refresh_rows(3);
+        model.query.focus = query::Focus::Input;
+        assert!(update(&mut model, Message::AutoRefresh).is_none());
+        model.query.focus = query::Focus::Table;
+        model.query.dialog = Some(query::Dialog::Load { selected: 0 });
+        assert!(update(&mut model, Message::AutoRefresh).is_none());
+        model.query.dialog = None;
+        model.error = Some(error_popup::Popup::new("error".into()));
+        assert!(update(&mut model, Message::AutoRefresh).is_none());
+        model.error = None;
+        model.offline = true;
+        assert!(update(&mut model, Message::AutoRefresh).is_none());
+        model.offline = false;
+        let generation = automatic(&mut model);
+        model.query.focus = query::Focus::Input;
+        model.query.input = crate::text_input::TextInput::new("new query");
+        let effect = update(&mut model, Message::Query(query::Message::Activate));
+        assert!(matches!(effect, Some(Effect::LoadPage { query, .. }) if query == "new query"));
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Err("stale auto failure".into()),
+            },
+        );
+        assert!(!model.status.contains("stale"));
+        assert!(model.refresh_batch.is_none());
+        assert!(model.loading.is_some());
+    }
+
+    #[test]
+    fn refreshed_table_updates_automatic_preview_from_fresh_metadata() {
+        let mut model = Model::new(&Config::default(), false);
+        update(
+            &mut model,
+            Message::Resize {
+                width: 160,
+                height: 24,
+            },
+        );
+        model.initial_page(Page {
+            rows: refresh_rows(1),
+            next_page_token: Vec::new(),
+        });
+        let previous = model.details.as_ref().unwrap().request.generation;
+        let generation = automatic(&mut model);
+        let mut rows = refresh_rows(1);
+        rows[0].overview = "updated metadata".into();
+        let effect = update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows,
+                    next_page_token: Vec::new(),
+                }),
+            },
+        );
+        assert!(matches!(effect, Some(Effect::Preview(_))));
+        assert!(model.details.as_ref().unwrap().request.generation > previous);
+        assert_eq!(model.details.as_ref().unwrap().text(), "updated metadata");
+    }
 
     fn load(token: &[u8], page_size: u16) -> Option<Effect> {
         Some(Effect::LoadPage {

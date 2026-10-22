@@ -11,6 +11,7 @@ mod payload;
 mod profiles;
 mod query;
 mod query_view;
+mod refresh;
 mod runtime;
 mod saved_queries;
 mod temporal;

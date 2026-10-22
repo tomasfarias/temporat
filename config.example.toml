@@ -20,6 +20,7 @@ tls = false # TLS defaults to true; disable it for plaintext local servers.
 # tls_domain = "temporal.example.com"
 
 [table]
+refresh_interval_secs = 30 # 0 starts paused; a toggles automatic refresh in the TUI.
 columns = ["workflow_id", "workflow_type", "status", "start_time", "close_time"]
 # Also available: run_id, task_queue, history_length.
 # By default, request one screen of rows per page. Optional fixed override:
@@ -34,6 +35,7 @@ Failed = "ExecutionStatus = 'Failed'"
 
 # Single-character bindings; Ctrl+c always quits.
 [keybindings]
+auto_refresh = "a"
 profiles = "n"
 up = "k"
 down = "j"

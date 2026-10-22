@@ -91,6 +91,9 @@ impl Workspace {
 // The workspace owns profile transitions; ordinary app updates remain profile-local.
 pub fn update(workspace: &mut Workspace, config: &Config, message: app::Message) -> Option<Effect> {
     let message = match message {
+        app::Message::AutoRefresh if workspace.picker.is_some() || workspace.pending.is_some() => {
+            return None;
+        }
         app::Message::Action(Action::Profiles) => {
             let selected = config
                 .profiles
@@ -138,6 +141,7 @@ pub fn update(workspace: &mut Workspace, config: &Config, message: app::Message)
             let returning = cached.as_ref().is_some_and(app::Model::has_cached_page);
             let mut target = cached.unwrap_or_else(|| app::Model::new(config, workspace.offline));
             target.profile = name;
+            target.auto_refresh = workspace.active.auto_refresh;
             target.query.saved = workspace.active.query.saved.clone();
             workspace.active.suspend();
             let previous = std::mem::replace(&mut workspace.active, target);
@@ -377,6 +381,54 @@ mod tests {
             panic!("expected preparation")
         };
         (id, query)
+    }
+
+    #[test]
+    fn polling_pauses_in_picker_and_toggle_state_follows_profile_switches() {
+        let config = config();
+        let mut workspace = Workspace::new(&config, false);
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Action(Action::Profiles),
+        );
+        assert!(update(&mut workspace, &config, app::Message::AutoRefresh).is_none());
+        let (id, _) = prepare(&mut workspace, &config, "staging");
+        assert!(update(&mut workspace, &config, app::Message::AutoRefresh).is_none());
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Action(Action::ToggleAutoRefresh),
+        );
+        send(
+            &mut workspace,
+            &config,
+            Message::Prepared {
+                id,
+                result: Ok(page("staging")),
+            },
+        );
+        assert!(!workspace.active.auto_refresh);
+        assert!(update(&mut workspace, &config, app::Message::AutoRefresh).is_none());
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Action(Action::ToggleAutoRefresh),
+        );
+        let (id, _) = prepare(&mut workspace, &config, "development");
+        send(
+            &mut workspace,
+            &config,
+            Message::Prepared {
+                id,
+                result: Ok(page("development")),
+            },
+        );
+        assert!(workspace.active.auto_refresh);
+        assert!(matches!(
+            update(&mut workspace, &config, app::Message::AutoRefresh),
+            Some(Effect::LoadPage { .. })
+        ));
     }
 
     #[test]

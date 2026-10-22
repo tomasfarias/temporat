@@ -59,12 +59,31 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
             frame.area(),
             true,
         );
+        let label = model.refresh_label(config);
+        let [_, indicator] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(label.len() as u16)]).areas(
+                ratatui::layout::Rect {
+                    height: frame.area().height.min(1),
+                    ..frame.area()
+                },
+            );
+        frame.render_widget(Paragraph::new(label).style(palette.surface()), indicator);
         if let Some(error) = &model.error {
             crate::error_popup::view(frame, error, &config.keybindings, &palette);
         }
         return;
     }
     let [status, query, body, help] = areas(table_area);
+    let label = model.refresh_label(config);
+    let [status, indicator] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(label.len() as u16 + 1),
+    ])
+    .areas(status);
+    frame.render_widget(
+        Paragraph::new(format!(" {label}")).style(palette.surface()),
+        indicator,
+    );
     let editing = !model.details_focused && model.query.focus == crate::query::Focus::Input;
     crate::query_view::bar(
         frame,

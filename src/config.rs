@@ -110,6 +110,7 @@ impl Default for Connection {
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Table {
+    pub refresh_interval_secs: u32,
     pub columns: Vec<Column>,
     pub page_size: Option<u16>,
     pub default_query: Option<String>,
@@ -118,6 +119,7 @@ pub struct Table {
 impl Default for Table {
     fn default() -> Self {
         Self {
+            refresh_interval_secs: 30,
             columns: vec![
                 Column::WorkflowId,
                 Column::WorkflowType,
@@ -277,6 +279,27 @@ mod tests {
 
     fn settings(source: &str) -> Result<Config> {
         read(&format!("{BASE}{source}"))
+    }
+
+    #[test]
+    fn refresh_interval_defaults_to_thirty_seconds_and_accepts_zero_to_start_paused() {
+        assert_eq!(settings("").unwrap().table.refresh_interval_secs, 30);
+        assert_eq!(
+            settings("[table]\nrefresh_interval_secs = 0")
+                .unwrap()
+                .table
+                .refresh_interval_secs,
+            0
+        );
+        assert_eq!(
+            settings("[table]\nrefresh_interval_secs = 45")
+                .unwrap()
+                .table
+                .refresh_interval_secs,
+            45
+        );
+        assert!(settings("[table]\nrefresh_interval_secs = -1").is_err());
+        assert!(settings("[table]\nrefresh_interval_secs = '30s'").is_err());
     }
 
     #[test]

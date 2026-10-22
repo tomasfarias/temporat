@@ -23,6 +23,7 @@ pub enum Action {
     OpenDetails,
     Back,
     Profiles,
+    ToggleAutoRefresh,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +39,7 @@ pub struct Keybindings {
     pub load_query: char,
     pub save_query: char,
     pub profiles: char,
+    pub auto_refresh: char,
 }
 
 impl Default for Keybindings {
@@ -53,12 +55,13 @@ impl Default for Keybindings {
             load_query: 'o',
             save_query: 's',
             profiles: 'n',
+            auto_refresh: 'a',
         }
     }
 }
 
 impl Keybindings {
-    fn bindings(&self) -> [(char, Action); 10] {
+    fn bindings(&self) -> [(char, Action); 11] {
         [
             (self.up, Action::Up),
             (self.down, Action::Down),
@@ -70,6 +73,7 @@ impl Keybindings {
             (self.load_query, Action::LoadQuery),
             (self.save_query, Action::SaveQuery),
             (self.profiles, Action::Profiles),
+            (self.auto_refresh, Action::ToggleAutoRefresh),
         ]
     }
 
@@ -109,12 +113,13 @@ impl Keybindings {
 
     pub fn help(&self) -> String {
         format!(
-            "{}/{} rows  {}/{} headers  Enter details  {} query  {} load  {} save  {} namespaces  {} refresh  {} quit",
+            "{}/{} rows  {}/{} headers  Enter details  {} query  {} auto  {} load  {} save  {} namespaces  {} refresh  {} quit",
             self.down,
             self.up,
             self.left,
             self.right,
             self.query,
+            self.auto_refresh,
             self.load_query,
             self.save_query,
             self.profiles,
@@ -185,7 +190,10 @@ pub fn details_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
         KeyCode::Right => Some(Action::Right),
         _ => keys.action(key),
     }?;
-    if matches!(action, Action::Quit | Action::Profiles) {
+    if matches!(
+        action,
+        Action::Quit | Action::Profiles | Action::ToggleAutoRefresh
+    ) {
         Some(Message::Action(action))
     } else {
         Some(Message::Details(crate::details::Message::Action(action)))
@@ -291,6 +299,29 @@ mod tests {
         assert_eq!(
             keys.action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(Action::Quit)
+        );
+    }
+
+    #[test]
+    fn auto_refresh_toggle_is_configurable_and_does_not_steal_query_input() {
+        let keys = Keybindings {
+            auto_refresh: 'A',
+            ..Default::default()
+        };
+        keys.validate().unwrap();
+        let key = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        let mut query = query::QueryBar::new("", Default::default());
+        assert!(matches!(
+            message(&keys, &query, key),
+            Some(Message::Action(Action::ToggleAutoRefresh))
+        ));
+        assert!(matches!(
+            details_message(&keys, key),
+            Some(Message::Action(Action::ToggleAutoRefresh))
+        ));
+        query.focus = Focus::Input;
+        assert!(
+            matches!(message(&keys, &query, key), Some(Message::Query(query::Message::Edit(Edit::Insert(text)))) if text == "A")
         );
     }
 
