@@ -24,6 +24,7 @@ pub struct Model {
     pub details_focused: bool,
     pub error: Option<error_popup::Popup>,
     pub auto_refresh: bool,
+    refresh_in_secs: u64,
     refresh_batch: Option<RefreshBatch>,
     detail_generation: u64,
     preview_pending: bool,
@@ -41,6 +42,7 @@ pub struct Model {
 }
 
 pub enum Message {
+    RefreshCountdown(u64),
     AutoRefresh,
     Profiles(crate::profiles::Message),
     Resume,
@@ -138,6 +140,7 @@ impl Model {
             details_focused: false,
             error: None,
             auto_refresh: config.table.refresh_interval_secs != 0,
+            refresh_in_secs: crate::refresh::period(config.table.refresh_interval_secs).as_secs(),
             refresh_batch: None,
             detail_generation: 0,
             preview_pending: false,
@@ -189,15 +192,14 @@ impl Model {
 
     pub fn refresh_label(&self, config: &Config) -> String {
         if self.offline {
-            "auto: offline".into()
+            "refresh: offline".into()
         } else if self.auto_refresh {
             format!(
-                "auto: {}s ({})",
-                crate::refresh::period(config.table.refresh_interval_secs).as_secs(),
-                config.keybindings.auto_refresh
+                "refresh in: {}s ({})",
+                self.refresh_in_secs, config.keybindings.auto_refresh
             )
         } else {
-            format!("auto: paused ({})", config.keybindings.auto_refresh)
+            format!("refresh: paused ({})", config.keybindings.auto_refresh)
         }
     }
 
@@ -389,6 +391,10 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
     let resizing = matches!(&message, Message::Resize { .. });
     let received_page = matches!(&message, Message::Loaded { .. } | Message::Resume);
     match message {
+        Message::RefreshCountdown(seconds) => {
+            model.refresh_in_secs = seconds;
+            return None;
+        }
         Message::AutoRefresh => {
             if !model.auto_refresh
                 || model.offline

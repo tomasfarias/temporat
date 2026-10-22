@@ -47,7 +47,13 @@ pub async fn run(
     let mut switch_request: Option<tokio::task::AbortHandle> = None;
     let mut events = EventStream::new();
     let mut refresh_timer = crate::refresh::timer(config.table.refresh_interval_secs);
+    let mut countdown_timer = crate::refresh::timer(1);
     while !workspace.active.quit {
+        effects.extend(profiles::update(
+            &mut workspace,
+            &config,
+            Message::RefreshCountdown(refresh_timer.remaining_secs()),
+        ));
         while let Some(effect) = effects.pop_front() {
             let epoch = workspace.epoch;
             match effect {
@@ -205,6 +211,7 @@ pub async fn run(
         let model = &workspace.active;
         let mut prepared_client = None;
         let message = tokio::select! {
+            _ = countdown_timer.tick(), if model.auto_refresh && !offline => None,
             _ = refresh_timer.tick(), if model.auto_refresh && !offline => Some(Message::AutoRefresh),
             event = events.next() => match event.context("terminal event stream closed")?? {
                 Event::Key(key) if model.error.is_some() => input::error_message(&config.keybindings, key),
@@ -255,6 +262,7 @@ pub async fn run(
             effects.extend(profiles::update(&mut workspace, &config, message));
             if epoch != workspace.epoch || auto_refresh != workspace.active.auto_refresh {
                 refresh_timer.reset();
+                countdown_timer.reset();
             }
             if epoch != workspace.epoch {
                 if let Some(task) = request.take() {
