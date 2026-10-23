@@ -226,10 +226,15 @@ pub fn update(workspace: &mut Workspace, config: &Config, message: app::Message)
                 id: workspace.next_id,
                 name: name.to_owned(),
                 query,
-                page_size: config
-                    .table
-                    .page_size
-                    .unwrap_or(workspace.height.saturating_sub(8).clamp(1, 1000)),
+                page_size: config.table.page_size.unwrap_or_else(|| {
+                    crate::layout::workflow_rows(ratatui::layout::Rect::new(
+                        0,
+                        0,
+                        workspace.width,
+                        workspace.height,
+                    ))
+                    .clamp(1, 1000) as u16
+                }),
             });
         }
     }
@@ -257,11 +262,26 @@ pub fn input(key: KeyEvent) -> Option<app::Message> {
 
 pub fn view(frame: &mut Frame, workspace: &Workspace, config: &Config) {
     crate::view::view(frame, &workspace.active, config);
+    picker_view(frame, workspace, config);
+    // Match input dispatch: errors take precedence over the picker and app focus.
+    let context = if workspace.active.error.is_none() && workspace.picker.is_some() {
+        if workspace.pending.is_some() {
+            crate::footer::Context::Connecting
+        } else {
+            crate::footer::Context::Profiles
+        }
+    } else {
+        crate::footer::Context::for_model(&workspace.active)
+    };
+    crate::footer::view(frame, context, &config.keybindings, &config.theme.palette());
+}
+
+fn picker_view(frame: &mut Frame, workspace: &Workspace, config: &Config) {
     let Some(picker) = &workspace.picker else {
         return;
     };
     let palette = config.theme.palette();
-    let area = frame.area();
+    let [area, _] = crate::layout::screen(frame.area());
     let [_, area, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(16.min(area.height)),
@@ -278,7 +298,7 @@ pub fn view(frame: &mut Frame, workspace: &Workspace, config: &Config) {
     let block = palette.block().title("Namespaces / profiles");
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let [search, list, help] = Layout::vertical([
+    let [search, list, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
@@ -311,14 +331,14 @@ pub fn view(frame: &mut Frame, workspace: &Workspace, config: &Config) {
         list,
         &mut state,
     );
-    let help_text = if let Some((_, name)) = &workspace.pending {
-        format!("Connecting to {name}…  Esc cancels")
+    let status_text = if let Some((_, name)) = &workspace.pending {
+        format!("Connecting to {name}…")
     } else if names.is_empty() {
-        "No matching profiles · type to search · Esc closes".into()
+        "No matching profiles".into()
     } else {
-        "Type to search · ↑/↓ or Ctrl+j/k · Enter switches · Esc closes".into()
+        String::new()
     };
-    frame.render_widget(Paragraph::new(help_text).style(palette.muted()), help);
+    frame.render_widget(Paragraph::new(status_text).style(palette.muted()), status);
     if workspace.pending.is_none()
         && workspace.active.error.is_none()
         && search.width > 0
@@ -327,7 +347,7 @@ pub fn view(frame: &mut Frame, workspace: &Workspace, config: &Config) {
         frame.set_cursor_position((search.x + cursor, search.y));
     }
     if let Some(error) = &workspace.active.error {
-        error_popup::view(frame, error, &config.keybindings, &palette);
+        error_popup::view(frame, error, &palette);
     }
 }
 
@@ -350,6 +370,129 @@ mod tests {
             },
         );
         config
+    }
+
+    fn rendered_lines(
+        workspace: &Workspace,
+        config: &Config,
+        width: u16,
+        height: u16,
+    ) -> Vec<String> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| view(frame, workspace, config))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn single_global_footer_tracks_panes_dialogs_and_overlay_precedence() {
+        let config = config();
+        let mut workspace = Workspace::new(&config, false);
+        workspace.active.rows = vec![WorkflowRow {
+            execution: Some(Execution {
+                workflow_id: "order".into(),
+                run_id: "run".into(),
+            }),
+            overview: "Status: Running".into(),
+            ..Default::default()
+        }];
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Resize {
+                width: 160,
+                height: 24,
+            },
+        );
+        let lines = rendered_lines(&workspace, &config, 160, 24);
+        assert!(lines[23].contains("Enter details"));
+        assert!(lines[23].contains("a toggle auto-refresh"));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("Enter details"))
+                .count(),
+            1
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Enter focuses details"))
+        );
+        // The footer is not constrained to either pane's width.
+        let (left, _) = crate::layout::panes(ratatui::layout::Rect::new(0, 0, 160, 24));
+        assert!(
+            !lines[23]
+                .chars()
+                .skip(usize::from(left.width))
+                .collect::<String>()
+                .trim()
+                .is_empty()
+        );
+
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Action(Action::OpenDetails),
+        );
+        let lines = rendered_lines(&workspace, &config, 160, 24);
+        assert!(lines[23].contains("Esc back"));
+        assert!(!lines[23].contains("Enter event"));
+        assert!(!lines[23].contains("headers"));
+        workspace.active.details.as_mut().unwrap().tab = details::Tab::History;
+        assert!(rendered_lines(&workspace, &config, 160, 24)[23].contains("Enter event"));
+        workspace.active.details.as_mut().unwrap().event_open = true;
+        assert!(rendered_lines(&workspace, &config, 160, 24)[23].contains("Esc events"));
+
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Resize {
+                width: 80,
+                height: 24,
+            },
+        );
+        assert!(rendered_lines(&workspace, &config, 80, 24)[23].contains("Esc events"));
+        workspace.active.details_focused = false;
+        workspace.active.query.focus = crate::query::Focus::Input;
+        assert!(rendered_lines(&workspace, &config, 80, 24)[23].contains("Enter apply"));
+        workspace.active.query.dialog = Some(crate::query::Dialog::Load { selected: 0 });
+        let lines = rendered_lines(&workspace, &config, 80, 24);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("Enter load"))
+                .count(),
+            1
+        );
+        assert!(lines[23].contains("Enter load"));
+
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Action(Action::Profiles),
+        );
+        assert!(rendered_lines(&workspace, &config, 80, 24)[23].contains("Enter switch"));
+        workspace.pending = Some((1, "staging".into()));
+        assert!(rendered_lines(&workspace, &config, 80, 24)[23].contains("Esc cancel"));
+        workspace.active.error = Some(error_popup::Popup::new("failed".into()));
+        let lines = rendered_lines(&workspace, &config, 80, 24);
+        assert!(lines[23].contains("Enter/Esc close"));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("Enter/Esc close"))
+                .count(),
+            1
+        );
+        for (width, height) in [(5, 3), (1, 1), (0, 0)] {
+            rendered_lines(&workspace, &config, width, height);
+        }
     }
 
     fn page(label: &str) -> Page {

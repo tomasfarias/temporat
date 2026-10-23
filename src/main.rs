@@ -4,6 +4,7 @@ mod debug_log;
 mod details;
 mod details_view;
 mod error_popup;
+mod footer;
 mod history;
 mod input;
 mod layout;

@@ -34,16 +34,6 @@ impl Column {
     }
 }
 
-pub fn areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 4] {
-    Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(area)
-}
-
 pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
     let palette = config.theme.palette();
     frame.render_widget(Block::default().style(palette.base()), frame.area());
@@ -52,14 +42,7 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         && model.details_focused
         && let Some(details) = &model.details
     {
-        crate::details_view::view(
-            frame,
-            details,
-            &config.keybindings,
-            &palette,
-            frame.area(),
-            true,
-        );
+        crate::details_view::view(frame, details, &palette, table_area, true);
         let label = model.refresh_label();
         let [_, indicator] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(label.width() as u16)])
@@ -69,11 +52,11 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
                 });
         frame.render_widget(Paragraph::new(label).style(palette.surface()), indicator);
         if let Some(error) = &model.error {
-            crate::error_popup::view(frame, error, &config.keybindings, &palette);
+            crate::error_popup::view(frame, error, &palette);
         }
         return;
     }
-    let [status, query, body, help] = areas(table_area);
+    let [status, query, body] = crate::layout::table(table_area);
     let label = model.refresh_label();
     let [status, indicator] = Layout::horizontal([
         Constraint::Min(0),
@@ -171,25 +154,9 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
             message,
         );
     }
-    frame.render_widget(
-        Paragraph::new(if editing {
-            "Enter apply │ Esc cancel │ Ctrl+o load │ Ctrl+s save │ Ctrl+u clear".into()
-        } else {
-            config.keybindings.help()
-        })
-        .style(palette.muted()),
-        help,
-    );
     if let Some(area) = detail_area {
         if let Some(details) = &model.details {
-            crate::details_view::view(
-                frame,
-                details,
-                &config.keybindings,
-                &palette,
-                area,
-                model.details_focused,
-            );
+            crate::details_view::view(frame, details, &palette, area, model.details_focused);
         } else {
             frame.render_widget(
                 Paragraph::new("Select a workflow to preview its execution.")
@@ -200,9 +167,9 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         }
     }
     if let Some(error) = &model.error {
-        crate::error_popup::view(frame, error, &config.keybindings, &palette);
+        crate::error_popup::view(frame, error, &palette);
     } else {
-        crate::query_view::modal(frame, &model.query, &config.keybindings, &palette);
+        crate::query_view::modal(frame, &model.query, &palette);
     }
 }
 
@@ -385,7 +352,7 @@ mod tests {
         assert!(row(left, 2).contains("Clear"));
         assert!(row(left, 6).contains("preview-order"));
         assert!(row(right, 3).contains("Workflow ID: preview-order"));
-        assert!(row(right, 23).contains("Enter focuses details"));
+        assert!(row(right, 23).trim().is_empty());
         assert_eq!(buffer[(left.right(), 6)].symbol(), " ");
     }
 }

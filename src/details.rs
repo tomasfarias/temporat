@@ -67,6 +67,7 @@ pub enum Command {
 
 impl Model {
     pub fn new(request: Request, width: u16, height: u16) -> Self {
+        let body = crate::layout::details(ratatui::layout::Rect::new(0, 0, width, height))[2];
         Self {
             request,
             snapshot: None,
@@ -79,7 +80,7 @@ impl Model {
             status: "Loading execution…".into(),
             scroll: 0,
             width: width.saturating_sub(2).max(1),
-            visible_rows: usize::from(height.saturating_sub(5)).max(1),
+            visible_rows: usize::from(body.height.saturating_sub(2)).max(1),
             loading: true,
         }
     }
@@ -195,8 +196,9 @@ pub fn update(model: &mut Model, message: Message) -> Option<Command> {
         Message::Action(Action::Up) => model.scroll = model.scroll.saturating_sub(1),
         Message::Action(Action::Down) => model.scroll += 1,
         Message::Resize { width, height } => {
+            let body = crate::layout::details(ratatui::layout::Rect::new(0, 0, width, height))[2];
             model.width = width.saturating_sub(2).max(1);
-            model.visible_rows = usize::from(height.saturating_sub(5)).max(1);
+            model.visible_rows = usize::from(body.height.saturating_sub(2)).max(1);
         }
         Message::Loaded { generation, result } if generation == model.request.generation => {
             model.loading = false;

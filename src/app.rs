@@ -299,7 +299,8 @@ impl Model {
     }
 
     fn detail_area(&self) -> ratatui::layout::Rect {
-        crate::layout::panes(self.area()).1.unwrap_or(self.area())
+        let (table, details) = crate::layout::panes(self.area());
+        details.unwrap_or(table)
     }
 
     fn cache_overview(
@@ -561,7 +562,7 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
         Message::Resize { width, height } => {
             model.width = width;
             model.height = height;
-            model.visible_rows = usize::from(height.saturating_sub(8)).max(1);
+            model.visible_rows = crate::layout::workflow_rows(model.area());
             let detail_area = model.detail_area();
             if let Some(error) = &mut model.error {
                 error.scroll(

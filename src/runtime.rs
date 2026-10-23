@@ -11,7 +11,7 @@ use crate::{
     config::{Config, Connection},
     input::{self, Action},
     profiles::{self, Workspace},
-    temporal, view,
+    temporal,
 };
 
 pub async fn run(
@@ -232,8 +232,8 @@ pub async fn run(
                     if details.is_some_and(|area| area.contains((event.column, event.row).into())) {
                         (event.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left))
                             .then_some(Message::Action(Action::OpenDetails))
-                    } else if details.is_some() || !model.details_focused {
-                        input::mouse(&model.query, event, view::areas(table)[1])
+                    } else if table.contains((event.column, event.row).into()) && (details.is_some() || !model.details_focused) {
+                        input::mouse(&model.query, event, crate::layout::table(table)[1])
                     } else { None }
                 },
                 Event::Paste(text) if model.error.is_none() && workspace.picker.is_some() => Some(Message::Profiles(profiles::Message::Edit(crate::text_input::Edit::Insert(text)))),

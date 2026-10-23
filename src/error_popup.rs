@@ -1,11 +1,10 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    text::Line,
     widgets::{Clear, Paragraph},
 };
 
-use crate::{input::Keybindings, theme::Palette};
+use crate::theme::Palette;
 
 pub struct Popup {
     pub text: String,
@@ -24,6 +23,7 @@ impl Popup {
     }
 
     fn layout(&self, screen: Rect) -> (Rect, Vec<String>) {
+        let [screen, _] = crate::layout::screen(screen);
         let width = screen.width.saturating_sub(4).min(110);
         let lines: Vec<_> = self
             .text
@@ -62,7 +62,7 @@ impl Popup {
     }
 }
 
-pub fn view(frame: &mut Frame, popup: &Popup, keys: &Keybindings, palette: &Palette) {
+pub fn view(frame: &mut Frame, popup: &Popup, palette: &Palette) {
     let (area, lines) = popup.layout(frame.area());
     let visible = usize::from(area.height.saturating_sub(2));
     let start = popup.scroll.min(lines.len().saturating_sub(visible.max(1)));
@@ -75,13 +75,6 @@ pub fn view(frame: &mut Frame, popup: &Popup, keys: &Keybindings, palette: &Pale
             "Workflow error · {}–{end}/{}",
             (start + 1).min(end),
             lines.len()
-        ))
-        .title_bottom(Line::styled(
-            format!(
-                "{}/{} scroll · PgUp/PgDn · Enter/Esc close",
-                keys.down, keys.up
-            ),
-            palette.muted(),
         ));
     frame.render_widget(Clear, area);
     frame.render_widget(
@@ -108,14 +101,7 @@ mod tests {
         assert!(popup.scroll > 0);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
-            .draw(|frame| {
-                view(
-                    frame,
-                    &popup,
-                    &Keybindings::default(),
-                    &crate::theme::Theme::default().palette(),
-                )
-            })
+            .draw(|frame| view(frame, &popup, &crate::theme::Theme::default().palette()))
             .unwrap();
         assert!(format!("{:?}", terminal.backend().buffer()).contains("LAST CAUSE"));
         popup.scroll(Message::Scroll(0), Rect::new(0, 0, 200, 200));
@@ -123,14 +109,7 @@ mod tests {
         for (width, height) in [(1, 1), (0, 0)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| {
-                    view(
-                        frame,
-                        &popup,
-                        &Keybindings::default(),
-                        &crate::theme::Theme::default().palette(),
-                    )
-                })
+                .draw(|frame| view(frame, &popup, &crate::theme::Theme::default().palette()))
                 .unwrap();
         }
     }

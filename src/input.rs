@@ -110,23 +110,6 @@ impl Keybindings {
             (key.code == KeyCode::Char(character)).then_some(action)
         })
     }
-
-    pub fn help(&self) -> String {
-        format!(
-            "{}/{} rows │ {}/{} headers │ Enter details │ {} query │ {} toggle auto-refresh │ {} load │ {} save │ {} namespaces │ {} refresh │ {} quit",
-            self.down,
-            self.up,
-            self.left,
-            self.right,
-            self.query,
-            self.auto_refresh,
-            self.load_query,
-            self.save_query,
-            self.profiles,
-            self.refresh,
-            self.quit
-        )
-    }
 }
 
 pub fn message(keys: &Keybindings, model: &query::QueryBar, key: KeyEvent) -> Option<Message> {

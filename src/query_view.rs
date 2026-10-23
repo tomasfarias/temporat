@@ -1,12 +1,10 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
-    text::Line,
     widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::{
-    input::Keybindings,
     query::{Dialog, Focus, QueryBar},
     theme::Palette,
 };
@@ -63,23 +61,19 @@ pub fn bar(frame: &mut Frame, model: &QueryBar, area: Rect, show_cursor: bool, p
     }
 }
 
-pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings, palette: &Palette) {
+pub fn modal(frame: &mut Frame, model: &QueryBar, palette: &Palette) {
     if let Some(Dialog::Save {
         name,
         error,
         saving,
     }) = &model.dialog
     {
-        let area = popup(frame.area(), 7);
+        let area = popup(crate::layout::screen(frame.area())[0], 7);
         frame.render_widget(Clear, area);
         let block = palette
             .block()
             .border_style(palette.border(true))
-            .title("Save query")
-            .title_bottom(Line::styled(
-                "Enter saves/replaces name · Esc cancels",
-                palette.muted(),
-            ));
+            .title("Save query");
         let [input, status] =
             Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(block.inner(area));
         frame.render_widget(block, area);
@@ -118,16 +112,15 @@ pub fn modal(frame: &mut Frame, model: &QueryBar, keys: &Keybindings, palette: &
     let Some(Dialog::Load { selected }) = &model.dialog else {
         return;
     };
-    let area = popup(frame.area(), model.saved.len().min(20) as u16 + 4);
+    let area = popup(
+        crate::layout::screen(frame.area())[0],
+        model.saved.len().min(20) as u16 + 4,
+    );
     frame.render_widget(Clear, area);
     let block = palette
         .block()
         .border_style(palette.border(true))
-        .title("Load query")
-        .title_bottom(Line::styled(
-            format!("{}/{} select · Enter load · Esc cancel", keys.down, keys.up),
-            palette.muted(),
-        ));
+        .title("Load query");
     if model.saved.is_empty() {
         frame.render_widget(
             Paragraph::new("No saved queries. Use Save or add [queries] in TOML.")
@@ -184,14 +177,7 @@ mod tests {
         for (width, height) in [(80, 12), (1, 1), (0, 0)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| {
-                    modal(
-                        frame,
-                        &model,
-                        &Keybindings::default(),
-                        &crate::theme::Theme::default().palette(),
-                    )
-                })
+                .draw(|frame| modal(frame, &model, &crate::theme::Theme::default().palette()))
                 .unwrap();
             if width == 80 {
                 assert!(format!("{:?}", terminal.backend().buffer()).contains("Query 29"));
@@ -210,14 +196,7 @@ mod tests {
         for (width, height) in [(80, 12), (1, 1), (0, 0)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| {
-                    modal(
-                        frame,
-                        &model,
-                        &Keybindings::default(),
-                        &crate::theme::Theme::default().palette(),
-                    )
-                })
+                .draw(|frame| modal(frame, &model, &crate::theme::Theme::default().palette()))
                 .unwrap();
             if width == 80 {
                 assert!(format!("{:?}", terminal.backend().buffer()).contains("disk error"));

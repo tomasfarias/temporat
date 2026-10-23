@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::Style,
     text::Line,
     widgets::{List, ListItem, ListState, Paragraph, Tabs},
@@ -8,25 +8,11 @@ use ratatui::{
 
 use crate::{
     details::{Model, Tab},
-    input::Keybindings,
     theme::Palette,
 };
 
-pub fn view(
-    frame: &mut Frame,
-    model: &Model,
-    keys: &Keybindings,
-    palette: &Palette,
-    area: Rect,
-    focused: bool,
-) {
-    let [status, tabs, body, help] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+pub fn view(frame: &mut Frame, model: &Model, palette: &Palette, area: Rect, focused: bool) {
+    let [status, tabs, body] = crate::layout::details(area);
     let status_text = if model.tab == Tab::History {
         format!(
             "{} | {} events loaded",
@@ -108,23 +94,6 @@ pub fn view(
             body,
         );
     }
-    frame.render_widget(
-        Paragraph::new(if !focused {
-            "Enter focuses details".into()
-        } else if area.width < 100 {
-            format!(
-                "{}/{} scroll │ {}/{} tabs │ Enter event │ Esc back",
-                keys.down, keys.up, keys.left, keys.right
-            )
-        } else {
-            format!(
-                "{}/{} scroll │ {}/{} tabs │ Enter event │ {} refresh │ {} toggle auto-refresh │ Esc back │ {} quit",
-                keys.down, keys.up, keys.left, keys.right, keys.refresh, keys.auto_refresh, keys.quit
-            )
-        })
-        .style(palette.muted()),
-        help,
-    );
 }
 
 #[cfg(test)]
@@ -160,7 +129,6 @@ mod tests {
                     view(
                         frame,
                         &model,
-                        &Keybindings::default(),
                         &crate::theme::Theme::default().palette(),
                         frame.area(),
                         true,
