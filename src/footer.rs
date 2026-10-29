@@ -53,6 +53,7 @@ impl Context {
             Self::Workflows => vec![
                 "Enter details".into(),
                 format!("{}/{} rows", keys.down, keys.up),
+                format!("{} top", keys.top),
                 format!("{}/{} headers", keys.left, keys.right),
                 format!("{} query", keys.query),
                 format!("{} refresh", keys.refresh),
@@ -81,6 +82,7 @@ impl Context {
                 }
                 hints.extend([
                     format!("{}/{} tabs", keys.left, keys.right),
+                    format!("{} list top", keys.top),
                     format!("{} refresh", keys.refresh),
                     quit(),
                     format!("{} toggle auto-refresh", keys.auto_refresh),

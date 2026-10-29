@@ -102,6 +102,7 @@ struct RefreshBatch {
     rows: Vec<WorkflowRow>,
     tokens: HashSet<Vec<u8>>,
     target_rows: usize,
+    pin_top: bool,
 }
 
 impl Model {
@@ -262,17 +263,42 @@ impl Model {
             return None;
         }
         batch.rows.extend(page.rows);
-        let viewport_end = self.row_offset + self.visible_rows;
+        // Anchor to the currently selected exact run, including navigation that
+        // happened while loading. Read beyond the cached window if it moved.
+        let execution = self
+            .rows
+            .get(self.selected)
+            .and_then(|row| row.execution.as_ref());
+        let selected = if batch.pin_top {
+            Some(0)
+        } else {
+            execution.and_then(|execution| {
+                batch
+                    .rows
+                    .iter()
+                    .position(|row| row.execution.as_ref() == Some(execution))
+            })
+        };
+        let screen_row = self.selected.saturating_sub(self.row_offset);
+        let offset = selected
+            .map(|index| index.saturating_sub(screen_row))
+            .unwrap_or(self.row_offset);
+        let viewport_end = offset + self.visible_rows;
         let required_rows = batch.target_rows.max(self.desired_rows).max(viewport_end);
-        if batch.rows.len() < required_rows && !page.next_page_token.is_empty() {
+        let seeking_selection = !batch.pin_top && execution.is_some() && selected.is_none();
+        if (batch.rows.len() < required_rows || seeking_selection)
+            && !page.next_page_token.is_empty()
+        {
             self.loading = Some(LoadKind::Refresh { automatic });
             return Some(self.page_request(page.next_page_token, self.query.applied.clone()));
         }
         // Commit only a complete replacement window. The old rows and pagination
         // token stay usable if any page fails or the user cancels the refresh.
         let batch = self.refresh_batch.take().unwrap();
-        self.selected = self.selected.min(batch.rows.len().saturating_sub(1));
-        self.row_offset = self.row_offset.min(self.selected);
+        self.selected = selected
+            .unwrap_or(self.selected)
+            .min(batch.rows.len().saturating_sub(1));
+        self.row_offset = offset.min(self.selected);
         self.desired_rows = self.row_offset + self.visible_rows;
         self.rows = batch.rows;
         self.next_page_token = page.next_page_token;
@@ -287,9 +313,20 @@ impl Model {
             }
         );
         self.overview_cache.clear();
-        if !self.details_focused {
-            self.details = None;
-            self.preview_pending = false;
+        // Keep the details tab, scroll position, and in-flight requests for the
+        // selected run. Only the passive overview needs a metadata refresh.
+        if !self.details_focused
+            && let Some(detail) = &mut self.details
+            && detail.tab == details::Tab::Overview
+            && self
+                .rows
+                .get(self.selected)
+                .and_then(|row| row.execution.as_ref())
+                == Some(&detail.request.execution)
+            && let Some(details::Command::Load(request)) =
+                details::update(detail, details::Message::Action(Action::Refresh))
+        {
+            return Some(Effect::Details(request));
         }
         None
     }
@@ -387,6 +424,11 @@ fn sync_preview(model: &mut Model) -> Option<Effect> {
 }
 
 fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
+    if matches!(&message, Message::Action(Action::Up | Action::Down))
+        && let Some(batch) = &mut model.refresh_batch
+    {
+        batch.pin_top = false;
+    }
     let mut detail_effect = None;
     let previous_visible_rows = model.visible_rows;
     let scrolling_down = matches!(&message, Message::Action(Action::Down));
@@ -503,6 +545,16 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
             }
         }
         Message::Action(Action::Up) => model.selected = model.selected.saturating_sub(1),
+        Message::Action(Action::Top) => {
+            model.selected = 0;
+            model.row_offset = 0;
+            model.desired_rows = model.visible_rows;
+            model.details_focused = false;
+            model.query.focus = query::Focus::Table;
+            if let Some(batch) = &mut model.refresh_batch {
+                batch.pin_top = true;
+            }
+        }
         Message::Action(Action::Down) => {
             model.selected = (model.selected + 1).min(model.rows.len().saturating_sub(1))
         }
@@ -675,6 +727,7 @@ fn begin_refresh(model: &mut Model, automatic: bool) -> Option<Effect> {
         rows: Vec::new(),
         tokens: HashSet::new(),
         target_rows: model.rows.len().max(model.visible_rows),
+        pin_top: false,
     });
     model.status = "Refreshing workflows…".into();
     Some(model.page_request(Vec::new(), model.query.applied.clone()))
@@ -732,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_refresh_commits_all_pages_atomically_and_keeps_cursor_and_viewport_fixed() {
+    fn automatic_refresh_commits_atomically_and_preserves_the_current_selected_run() {
         let mut model = Model::new(&Config::default(), false);
         update(&mut model, resize(4));
         model.rows = refresh_rows(8);
@@ -764,8 +817,8 @@ mod tests {
             },
         );
         assert_eq!(model.rows.len(), 10);
-        assert_eq!(model.selected, 6);
-        assert_eq!(model.row_offset, 3);
+        assert_eq!(model.selected, 8);
+        assert_eq!(model.row_offset, 5);
         assert_eq!(model.selected - model.row_offset, screen_row);
         assert_eq!(
             model.rows[model.selected]
@@ -773,7 +826,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .run_id,
-            "run-4"
+            "run-6"
         );
         assert_eq!(model.selected_column, 2);
         assert_eq!(model.query.input.text, "unapplied draft");
@@ -782,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_refresh_does_not_follow_workflows_shifted_by_insertions() {
+    fn automatic_refresh_follows_insertions_and_refills_the_shifted_viewport() {
         let mut model = Model::new(&Config::default(), false);
         update(&mut model, resize(4));
         model.rows = refresh_rows(4);
@@ -791,7 +844,7 @@ mod tests {
         let mut rows = refresh_rows(1);
         rows[0].execution.as_mut().unwrap().run_id = "new run".into();
         rows.extend(refresh_rows(3));
-        assert!(
+        assert!(matches!(
             update(
                 &mut model,
                 Message::Loaded {
@@ -801,19 +854,29 @@ mod tests {
                         next_page_token: vec![1]
                     })
                 }
-            )
-            .is_none()
-        );
+            ),
+            Some(Effect::LoadPage { .. })
+        ));
         assert_eq!(model.rows.len(), 4);
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: refresh_rows(4).into_iter().skip(3).collect(),
+                    next_page_token: Vec::new(),
+                }),
+            },
+        );
         assert_eq!(
             (model.selected, model.row_offset, model.rows.len()),
-            (1, 0, 4)
+            (2, 1, 5)
         );
         assert_eq!(model.rows.len() - model.row_offset, model.visible_rows);
     }
 
     #[test]
-    fn manual_refresh_keeps_scrolled_position_and_preserves_cache_on_failure() {
+    fn manual_refresh_preserves_selected_run_and_keeps_cache_on_failure() {
         let mut model = Model::new(&Config::default(), false);
         update(&mut model, resize(4));
         model.initial_page(Page {
@@ -854,8 +917,8 @@ mod tests {
                 }),
             },
         );
-        assert_eq!((model.selected, model.row_offset), (6, 3));
-        assert_eq!(model.rows[6].execution.as_ref().unwrap().run_id, "run-1");
+        assert_eq!((model.selected, model.row_offset), (1, 0));
+        assert_eq!(model.rows[1].execution.as_ref().unwrap().run_id, "run-6");
         let Some(Effect::LoadPage { generation, .. }) =
             update(&mut model, Message::Action(Action::Refresh))
         else {
@@ -871,7 +934,7 @@ mod tests {
         assert!(model.error.is_some());
         assert_eq!(
             (model.selected, model.row_offset, model.rows.len()),
-            (6, 3, 8)
+            (1, 0, 8)
         );
     }
 
@@ -1052,6 +1115,21 @@ mod tests {
             next_page_token: Vec::new(),
         });
         let previous = model.details.as_ref().unwrap().request.generation;
+        let mut snapshot = model
+            .details
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .clone();
+        update(
+            &mut model,
+            Message::Details(details::Message::Loaded {
+                generation: previous,
+                result: Ok(details::Content::Overview(snapshot.clone())),
+            }),
+        );
         let generation = automatic(&mut model);
         let mut rows = refresh_rows(1);
         rows[0].overview = "updated metadata".into();
@@ -1065,9 +1143,129 @@ mod tests {
                 }),
             },
         );
-        assert!(matches!(effect, Some(Effect::Preview(_))));
-        assert!(model.details.as_ref().unwrap().request.generation > previous);
+        assert!(matches!(effect, Some(Effect::Details(_))));
+        assert_eq!(model.details.as_ref().unwrap().request.generation, previous);
+        snapshot.overview = "updated metadata".into();
+        update(
+            &mut model,
+            Message::Details(details::Message::Loaded {
+                generation: previous,
+                result: Ok(details::Content::Overview(snapshot)),
+            }),
+        );
         assert_eq!(model.details.as_ref().unwrap().text(), "updated metadata");
+    }
+
+    #[test]
+    fn refresh_seeks_beyond_cached_rows_and_preserves_details_tab_scroll_and_focus() {
+        for focused in [false, true] {
+            let mut model = Model::new(&Config::default(), false);
+            update(
+                &mut model,
+                Message::Resize {
+                    width: 160,
+                    height: 10,
+                },
+            );
+            model.initial_page(Page {
+                rows: refresh_rows(4),
+                next_page_token: Vec::new(),
+            });
+            update(&mut model, Message::Action(Action::Down));
+            model.details_focused = focused;
+            let detail = model.details.as_mut().unwrap();
+            let request = detail.request.clone();
+            detail.tab = details::Tab::InputResult;
+            detail.input_result = Some("payload\n".repeat(40));
+            detail.scroll = 5;
+            let generation = automatic(&mut model);
+            let mut first = refresh_rows(4);
+            // Same workflow ID with a different run must not steal selection.
+            first[1].execution.as_mut().unwrap().run_id = "different-run".into();
+            assert!(matches!(
+                update(
+                    &mut model,
+                    Message::Loaded {
+                        generation,
+                        result: Ok(Page {
+                            rows: first,
+                            next_page_token: vec![1]
+                        })
+                    }
+                ),
+                Some(Effect::LoadPage { .. })
+            ));
+            assert_eq!(model.rows[1].execution.as_ref().unwrap().run_id, "run-1");
+            update(
+                &mut model,
+                Message::Loaded {
+                    generation,
+                    result: Ok(Page {
+                        rows: refresh_rows(2).into_iter().skip(1).collect(),
+                        next_page_token: Vec::new(),
+                    }),
+                },
+            );
+            assert_eq!(model.selected, 4);
+            let detail = model.details.as_ref().unwrap();
+            assert_eq!(detail.request, request);
+            assert!(detail.tab == details::Tab::InputResult);
+            assert_eq!(detail.scroll, 5);
+            assert_eq!(model.details_focused, focused);
+            assert_eq!(
+                model.rows[model.selected].execution.as_ref(),
+                Some(&detail.request.execution)
+            );
+        }
+    }
+
+    #[test]
+    fn top_jumps_to_first_row_and_overrides_refresh_anchor_while_loading() {
+        let mut model = Model::new(&Config::default(), false);
+        update(&mut model, Message::Action(Action::Top));
+        assert_eq!((model.selected, model.row_offset), (0, 0));
+        update(&mut model, resize(2));
+        model.initial_page(Page {
+            rows: refresh_rows(4),
+            next_page_token: Vec::new(),
+        });
+        model.selected = 3;
+        model.row_offset = 2;
+        let generation = automatic(&mut model);
+        let mut rows = refresh_rows(4);
+        for row in &mut rows {
+            row.execution.as_mut().unwrap().run_id.push_str("-new");
+        }
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows,
+                    next_page_token: vec![1],
+                }),
+            },
+        );
+        model.details_focused = true;
+        update(&mut model, Message::Action(Action::Top));
+        assert!(!model.details_focused);
+        assert_eq!((model.selected, model.row_offset), (0, 0));
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: Vec::new(),
+                    next_page_token: vec![2],
+                }),
+            },
+        );
+        assert_eq!((model.selected, model.row_offset), (0, 0));
+        assert_eq!(
+            model.rows[0].execution.as_ref().unwrap().run_id,
+            "run-0-new"
+        );
+        assert!(model.loading.is_none());
     }
 
     fn load(token: &[u8], page_size: u16) -> Option<Effect> {

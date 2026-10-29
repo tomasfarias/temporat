@@ -13,6 +13,7 @@ use serde::Deserialize;
 pub enum Action {
     Up,
     Down,
+    Top,
     Left,
     Right,
     Refresh,
@@ -31,6 +32,7 @@ pub enum Action {
 pub struct Keybindings {
     pub up: char,
     pub down: char,
+    pub top: char,
     pub left: char,
     pub right: char,
     pub refresh: char,
@@ -47,6 +49,7 @@ impl Default for Keybindings {
         Self {
             up: 'k',
             down: 'j',
+            top: 'g',
             left: 'h',
             right: 'l',
             refresh: 'r',
@@ -61,10 +64,11 @@ impl Default for Keybindings {
 }
 
 impl Keybindings {
-    fn bindings(&self) -> [(char, Action); 11] {
+    fn bindings(&self) -> [(char, Action); 12] {
         [
             (self.up, Action::Up),
             (self.down, Action::Down),
+            (self.top, Action::Top),
             (self.left, Action::Left),
             (self.right, Action::Right),
             (self.refresh, Action::Refresh),
@@ -175,7 +179,7 @@ pub fn details_message(keys: &Keybindings, key: KeyEvent) -> Option<Message> {
     }?;
     if matches!(
         action,
-        Action::Quit | Action::Profiles | Action::ToggleAutoRefresh
+        Action::Quit | Action::Profiles | Action::ToggleAutoRefresh | Action::Top
     ) {
         Some(Message::Action(action))
     } else {
@@ -306,6 +310,33 @@ mod tests {
         assert!(
             matches!(message(&keys, &query, key), Some(Message::Query(query::Message::Edit(Edit::Insert(text)))) if text == "A")
         );
+    }
+
+    #[test]
+    fn top_binding_routes_from_table_and_details_but_remains_text_in_editors() {
+        let mut keys = Keybindings::default();
+        let mut query = query::QueryBar::new("", Default::default());
+        let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert!(matches!(
+            message(&keys, &query, key),
+            Some(Message::Action(Action::Top))
+        ));
+        assert!(matches!(
+            details_message(&keys, key),
+            Some(Message::Action(Action::Top))
+        ));
+        query.focus = Focus::Input;
+        assert!(
+            matches!(message(&keys, &query, key), Some(Message::Query(query::Message::Edit(Edit::Insert(text)))) if text == "g")
+        );
+        keys.top = 't';
+        keys.validate().unwrap();
+        assert_eq!(
+            keys.action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
+            Some(Action::Top)
+        );
+        keys.top = keys.down;
+        assert!(keys.validate().is_err());
     }
 
     #[test]

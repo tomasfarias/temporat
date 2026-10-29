@@ -39,6 +39,7 @@ auto_refresh = "a"
 profiles = "n"
 up = "k"
 down = "j"
+top = "g" # Jump to the first workflow without refreshing.
 left = "h"
 right = "l"
 refresh = "r"
