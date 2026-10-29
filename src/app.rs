@@ -263,12 +263,16 @@ impl Model {
             return None;
         }
         batch.rows.extend(page.rows);
-        // Anchor to the currently selected exact run, including navigation that
-        // happened while loading. Read beyond the cached window if it moved.
-        let execution = self
-            .rows
-            .get(self.selected)
-            .and_then(|row| row.execution.as_ref());
+        // Automatic table updates keep the row position. While inspecting details
+        // (or explicitly refreshing), follow the exact run instead. Use current
+        // focus so entering/leaving details during a refresh takes effect too.
+        let execution = if self.details_focused || !automatic {
+            self.rows
+                .get(self.selected)
+                .and_then(|row| row.execution.as_ref())
+        } else {
+            None
+        };
         let selected = if batch.pin_top {
             Some(0)
         } else {
@@ -785,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_refresh_commits_atomically_and_preserves_the_current_selected_run() {
+    fn automatic_refresh_keeps_table_cursor_and_scroll_position_when_details_are_unfocused() {
         let mut model = Model::new(&Config::default(), false);
         update(&mut model, resize(4));
         model.rows = refresh_rows(8);
@@ -817,8 +821,8 @@ mod tests {
             },
         );
         assert_eq!(model.rows.len(), 10);
-        assert_eq!(model.selected, 8);
-        assert_eq!(model.row_offset, 5);
+        assert_eq!(model.selected, 6);
+        assert_eq!(model.row_offset, 3);
         assert_eq!(model.selected - model.row_offset, screen_row);
         assert_eq!(
             model.rows[model.selected]
@@ -826,7 +830,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .run_id,
-            "run-6"
+            "run-4"
         );
         assert_eq!(model.selected_column, 2);
         assert_eq!(model.query.input.text, "unapplied draft");
@@ -835,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_refresh_follows_insertions_and_refills_the_shifted_viewport() {
+    fn automatic_table_refresh_does_not_follow_insertions() {
         let mut model = Model::new(&Config::default(), false);
         update(&mut model, resize(4));
         model.rows = refresh_rows(4);
@@ -844,7 +848,7 @@ mod tests {
         let mut rows = refresh_rows(1);
         rows[0].execution.as_mut().unwrap().run_id = "new run".into();
         rows.extend(refresh_rows(3));
-        assert!(matches!(
+        assert!(
             update(
                 &mut model,
                 Message::Loaded {
@@ -854,23 +858,13 @@ mod tests {
                         next_page_token: vec![1]
                     })
                 }
-            ),
-            Some(Effect::LoadPage { .. })
-        ));
-        assert_eq!(model.rows.len(), 4);
-        update(
-            &mut model,
-            Message::Loaded {
-                generation,
-                result: Ok(Page {
-                    rows: refresh_rows(4).into_iter().skip(3).collect(),
-                    next_page_token: Vec::new(),
-                }),
-            },
+            )
+            .is_none()
         );
+        assert_eq!(model.rows.len(), 4);
         assert_eq!(
             (model.selected, model.row_offset, model.rows.len()),
-            (2, 1, 5)
+            (1, 0, 4)
         );
         assert_eq!(model.rows.len() - model.row_offset, model.visible_rows);
     }
@@ -1178,7 +1172,16 @@ mod tests {
             detail.tab = details::Tab::InputResult;
             detail.input_result = Some("payload\n".repeat(40));
             detail.scroll = 5;
-            let generation = automatic(&mut model);
+            let generation = if focused {
+                automatic(&mut model)
+            } else {
+                let Some(Effect::LoadPage { generation, .. }) =
+                    update(&mut model, Message::Action(Action::Refresh))
+                else {
+                    panic!()
+                };
+                generation
+            };
             let mut first = refresh_rows(4);
             // Same workflow ID with a different run must not steal selection.
             first[1].execution.as_mut().unwrap().run_id = "different-run".into();
@@ -1217,6 +1220,63 @@ mod tests {
                 Some(&detail.request.execution)
             );
         }
+    }
+
+    #[test]
+    fn leaving_details_during_auto_refresh_restores_positional_selection_and_matching_preview() {
+        let mut model = Model::new(&Config::default(), false);
+        update(
+            &mut model,
+            Message::Resize {
+                width: 160,
+                height: 10,
+            },
+        );
+        model.initial_page(Page {
+            rows: refresh_rows(4),
+            next_page_token: Vec::new(),
+        });
+        update(&mut model, Message::Action(Action::Down));
+        update(&mut model, Message::Action(Action::OpenDetails));
+        let generation = automatic(&mut model);
+        let mut rows = refresh_rows(4);
+        rows[1].execution.as_mut().unwrap().run_id = "replacement-run".into();
+        assert!(matches!(
+            update(
+                &mut model,
+                Message::Loaded {
+                    generation,
+                    result: Ok(Page {
+                        rows,
+                        next_page_token: vec![1]
+                    })
+                }
+            ),
+            Some(Effect::LoadPage { .. })
+        ));
+        update(
+            &mut model,
+            Message::Details(details::Message::Action(Action::Back)),
+        );
+        assert!(!model.details_focused);
+        update(
+            &mut model,
+            Message::Loaded {
+                generation,
+                result: Ok(Page {
+                    rows: Vec::new(),
+                    next_page_token: vec![2],
+                }),
+            },
+        );
+        assert_eq!((model.selected, model.row_offset), (1, 0));
+        assert!(model.loading.is_none());
+        let execution = model.rows[model.selected].execution.as_ref().unwrap();
+        assert_eq!(execution.run_id, "replacement-run");
+        assert_eq!(
+            &model.details.as_ref().unwrap().request.execution,
+            execution
+        );
     }
 
     #[test]
