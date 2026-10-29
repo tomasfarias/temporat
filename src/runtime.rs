@@ -22,7 +22,8 @@ pub async fn run(
     crossterm::execute!(
         std::io::stdout(),
         crossterm::event::EnableBracketedPaste,
-        crossterm::event::EnableMouseCapture
+        // Keep mouse events in the terminal for native drag-to-select and copying.
+        crossterm::event::DisableMouseCapture
     )?;
     let _input_mode = InputMode;
     let mut workspace = Workspace::new(&config, offline);
