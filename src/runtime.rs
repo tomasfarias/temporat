@@ -51,6 +51,8 @@ pub async fn run(
     let mut countdown_timer = crate::refresh::timer(1);
     let mut animation_timer = tokio::time::interval(Duration::from_millis(100));
     animation_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut cell_timer = tokio::time::interval(crate::overflow::TICK);
+    cell_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     while !workspace.active.quit {
         effects.extend(profiles::update(
             &mut workspace,
@@ -214,6 +216,7 @@ pub async fn run(
         let model = &workspace.active;
         let mut prepared_client = None;
         let message = tokio::select! {
+            _ = cell_timer.tick(), if model.cell_scrolling() && workspace.picker.is_none() => Some(Message::AnimateCell),
             _ = animation_timer.tick(), if model.refreshing() => Some(Message::AnimateRefresh),
             _ = countdown_timer.tick(), if model.auto_refresh && !offline => None,
             _ = refresh_timer.tick(), if model.auto_refresh && !offline => Some(Message::AutoRefresh),

@@ -23,15 +23,6 @@ impl Column {
             Self::HistoryLength => "History length",
         }
     }
-
-    fn width(self) -> u16 {
-        match self {
-            Self::RunId => 36,
-            Self::WorkflowId | Self::WorkflowType | Self::TaskQueue => 28,
-            Self::StartTime | Self::CloseTime => 20,
-            Self::Status | Self::HistoryLength => 16,
-        }
-    }
 }
 
 pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
@@ -88,6 +79,7 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         status,
     );
     let columns = &model.columns;
+    let column_areas = crate::layout::workflow_columns(body, columns);
     let rows = model
         .rows
         .iter()
@@ -96,7 +88,13 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         .take(model.visible_rows)
         .map(|(index, row)| {
             let cells = row.cells.iter().enumerate().map(|(column, text)| {
-                let cell = Cell::from(text.as_str());
+                let width = column_areas.get(column).map_or(0, |area| area.width);
+                let offset = if index == model.selected && column == model.selected_column {
+                    model.cell_scroll.offset()
+                } else {
+                    0
+                };
+                let cell = Cell::from(crate::overflow::cell(text, width, offset));
                 if columns.get(column) == Some(&Column::Status) {
                     cell.style(palette.workflow_status(text))
                 } else {
@@ -112,13 +110,17 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
         });
     let table = Table::new(
         rows,
-        columns
+        column_areas
             .iter()
-            .map(|column| Constraint::Length(column.width())),
+            .map(|area| Constraint::Length(area.width)),
     )
     .header(
         Row::new(columns.iter().enumerate().map(|(index, column)| {
-            let cell = Cell::from(column.title());
+            let cell = Cell::from(crate::overflow::cell(
+                column.title(),
+                column_areas[index].width,
+                0,
+            ));
             if index == model.selected_column {
                 cell.style(palette.selected_header())
             } else {
@@ -177,6 +179,86 @@ pub fn view(frame: &mut Frame, model: &Model, config: &Config) {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn animation_changes_only_the_selected_cell_and_preserves_status_colors() {
+        let mut config = Config::default();
+        config.table.columns = vec![Column::WorkflowId, Column::Status];
+        let mut model = Model::preview(&config);
+        for row in &mut model.rows {
+            row.cells = vec![
+                "workflow-with-a-long-name".into(),
+                "Continued as new".into(),
+            ];
+        }
+        crate::app::update(
+            &mut model,
+            crate::app::Message::Resize {
+                width: 30,
+                height: 12,
+            },
+        );
+        let mut terminal = Terminal::new(TestBackend::new(30, 12)).unwrap();
+        for selected_column in 0..2 {
+            model.selected_column = selected_column;
+            crate::app::update(&mut model, crate::app::Message::RefreshCountdown(30));
+            terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+            let before = terminal.backend().buffer().clone();
+            for _ in 0..10 {
+                crate::app::update(&mut model, crate::app::Message::AnimateCell);
+            }
+            terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+            let after = terminal.backend().buffer();
+            let (pane, _) = crate::layout::panes(before.area);
+            let cell =
+                crate::layout::workflow_columns(crate::layout::table(pane)[2], &model.columns)
+                    [selected_column];
+            assert_ne!(before, *after);
+            for y in 0..12 {
+                for x in 0..30 {
+                    if y == 6 && (cell.x..cell.right()).contains(&x) {
+                        assert_eq!(after[(x, y)].fg, before[(x, y)].fg);
+                        assert_eq!(after[(x, y)].bg, before[(x, y)].bg);
+                    } else {
+                        assert_eq!(after[(x, y)], before[(x, y)]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn markers_match_actual_column_edges_in_narrow_and_split_layouts() {
+        let config = Config::default();
+        let mut model = Model::preview(&config);
+        for row in &mut model.rows {
+            row.cells.fill("x".repeat(100));
+        }
+        for width in [4, 8, 15, 40, 80, 139, 140, 160, 240] {
+            crate::app::update(
+                &mut model,
+                crate::app::Message::Resize { width, height: 12 },
+            );
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal.draw(|frame| view(frame, &model, &config)).unwrap();
+            let (pane, _) = crate::layout::panes(ratatui::layout::Rect::new(0, 0, width, 12));
+            let body = crate::layout::table(pane)[2];
+            let buffer = terminal.backend().buffer();
+            for column in crate::layout::workflow_columns(body, &model.columns) {
+                if column.width == 0 {
+                    continue;
+                }
+                assert_eq!(
+                    buffer[(column.right() - 1, 6)].symbol(),
+                    "…",
+                    "terminal width {width}, column {column:?}"
+                );
+                for x in column.x..column.right() - 1 {
+                    assert_eq!(buffer[(x, 6)].symbol(), "x");
+                }
+            }
+        }
+    }
 
     #[test]
     fn column_navigation_moves_highlight_without_moving_content() {

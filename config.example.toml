@@ -27,6 +27,9 @@ columns = ["workflow_id", "workflow_type", "status", "start_time", "close_time"]
 # page_size = 100
 # default_query = "Running"
 
+[table.overflow]
+scroll_selected = true # Scroll the selected overflowing cell; false keeps only the ellipsis.
+
 # Named Temporal visibility queries. No default_query means all workflows.
 [queries]
 All = ""

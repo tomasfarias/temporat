@@ -1,4 +1,6 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
+
+use crate::config::Column;
 
 pub const SPLIT_MIN_WIDTH: u16 = 140;
 
@@ -31,6 +33,23 @@ pub fn table(area: Rect) -> [Rect; 3] {
 pub fn workflow_rows(screen: Rect) -> usize {
     let (pane, _) = panes(screen);
     usize::from(table(pane)[2].height.saturating_sub(3)).max(1)
+}
+
+/// Match the table's borders, one-space column gaps, and start alignment.
+/// Both animation and rendering use these actual (possibly compressed) widths.
+pub fn workflow_columns(body: Rect, columns: &[Column]) -> Vec<Rect> {
+    Layout::horizontal(columns.iter().map(|column| {
+        Constraint::Length(match column {
+            Column::RunId => 36,
+            Column::WorkflowId | Column::WorkflowType | Column::TaskQueue => 28,
+            Column::StartTime | Column::CloseTime => 20,
+            Column::Status | Column::HistoryLength => 16,
+        })
+    }))
+    .flex(Flex::Start)
+    .spacing(1)
+    .split(body.inner(Margin::new(1, 1)))
+    .to_vec()
 }
 
 pub fn details(area: Rect) -> [Rect; 3] {

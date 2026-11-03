@@ -24,6 +24,8 @@ pub struct Model {
     pub details_focused: bool,
     pub error: Option<error_popup::Popup>,
     pub auto_refresh: bool,
+    pub cell_scroll: crate::overflow::Scroll,
+    scroll_selected: bool,
     refresh_in_secs: u64,
     refresh_frame: usize,
     refresh_batch: Option<RefreshBatch>,
@@ -43,6 +45,7 @@ pub struct Model {
 }
 
 pub enum Message {
+    AnimateCell,
     AnimateRefresh,
     RefreshCountdown(u64),
     AutoRefresh,
@@ -143,6 +146,8 @@ impl Model {
             details_focused: false,
             error: None,
             auto_refresh: config.table.refresh_interval_secs != 0,
+            cell_scroll: crate::overflow::Scroll::default(),
+            scroll_selected: config.table.overflow.scroll_selected,
             refresh_in_secs: crate::refresh::period(config.table.refresh_interval_secs).as_secs(),
             refresh_frame: 0,
             refresh_batch: None,
@@ -167,6 +172,7 @@ impl Model {
     }
 
     pub fn suspend(&mut self) {
+        self.cell_scroll = crate::overflow::Scroll::default();
         self.generation += 1;
         self.refresh_batch = None;
         if self.loading.take().is_some() {
@@ -199,6 +205,37 @@ impl Model {
             self.loading,
             Some(LoadKind::Replace | LoadKind::Refresh { .. })
         )
+    }
+
+    pub fn cell_scrolling(&self) -> bool {
+        self.scroll_selected
+            && self.cell_scroll.active()
+            && !self.details_focused
+            && self.query.focus == query::Focus::Table
+            && self.query.dialog.is_none()
+            && self.error.is_none()
+    }
+
+    fn sync_cell_scroll(&mut self) {
+        let (pane, _) = crate::layout::panes(self.area());
+        let body = crate::layout::table(pane)[2];
+        let columns = crate::layout::workflow_columns(body, &self.columns);
+        if self.scroll_selected
+            && body.height > 3
+            && let Some(row) = self.rows.get(self.selected)
+            && let Some(text) = row.cells.get(self.selected_column)
+            && let Some(column) = columns.get(self.selected_column)
+        {
+            self.cell_scroll.sync(
+                self.selected,
+                self.selected_column,
+                row.execution.as_ref(),
+                text,
+                column.width,
+            );
+        } else {
+            self.cell_scroll = crate::overflow::Scroll::default();
+        }
     }
 
     pub fn refresh_label(&self) -> String {
@@ -383,8 +420,14 @@ impl Model {
 }
 
 pub fn update(model: &mut Model, message: Message) -> Option<Effect> {
+    let animate_cell = matches!(&message, Message::AnimateCell);
     let effect = update_inner(model, message);
-    combine(effect, sync_preview(model))
+    let effect = combine(effect, sync_preview(model));
+    model.sync_cell_scroll();
+    if animate_cell && model.cell_scrolling() {
+        model.cell_scroll.tick();
+    }
+    effect
 }
 
 fn combine(first: Option<Effect>, second: Option<Effect>) -> Option<Effect> {
@@ -439,6 +482,7 @@ fn update_inner(model: &mut Model, message: Message) -> Option<Effect> {
     let resizing = matches!(&message, Message::Resize { .. });
     let received_page = matches!(&message, Message::Loaded { .. } | Message::Resume);
     match message {
+        Message::AnimateCell => return None,
         Message::AnimateRefresh => {
             model.refresh_frame = (model.refresh_frame + 1) % 10;
             return None;

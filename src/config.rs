@@ -110,6 +110,7 @@ impl Default for Connection {
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Table {
+    pub overflow: Overflow,
     pub refresh_interval_secs: u32,
     pub columns: Vec<Column>,
     pub page_size: Option<u16>,
@@ -119,6 +120,7 @@ pub struct Table {
 impl Default for Table {
     fn default() -> Self {
         Self {
+            overflow: Overflow::default(),
             refresh_interval_secs: 30,
             columns: vec![
                 Column::WorkflowId,
@@ -129,6 +131,20 @@ impl Default for Table {
             ],
             page_size: None,
             default_query: None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Overflow {
+    pub scroll_selected: bool,
+}
+
+impl Default for Overflow {
+    fn default() -> Self {
+        Self {
+            scroll_selected: true,
         }
     }
 }
@@ -271,6 +287,17 @@ fn parse(source: &str, path: &Path) -> Result<Config> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn overflow_scrolling_defaults_on_and_can_be_disabled() {
+        for (source, enabled) in [
+            ("", true),
+            ("[overflow]", true),
+            ("[overflow]\nscroll_selected = false", false),
+        ] {
+            let table: Table = toml::from_str(source).unwrap();
+            assert_eq!(table.overflow.scroll_selected, enabled);
+        }
+    }
     fn read(source: &str) -> Result<Config> {
         parse(source, Path::new("/config/temporat/config.toml"))
     }

@@ -91,7 +91,9 @@ impl Workspace {
 // The workspace owns profile transitions; ordinary app updates remain profile-local.
 pub fn update(workspace: &mut Workspace, config: &Config, message: app::Message) -> Option<Effect> {
     let message = match message {
-        app::Message::AutoRefresh if workspace.picker.is_some() || workspace.pending.is_some() => {
+        app::Message::AutoRefresh | app::Message::AnimateCell
+            if workspace.picker.is_some() || workspace.pending.is_some() =>
+        {
             return None;
         }
         app::Message::Action(Action::Profiles) => {
@@ -524,6 +526,50 @@ mod tests {
             panic!("expected preparation")
         };
         (id, query)
+    }
+
+    #[test]
+    fn cell_scrolling_pauses_in_picker_and_restarts_after_profile_switches() {
+        let config = config();
+        let mut workspace = Workspace::new(&config, false);
+        let long_page = || page("long-workflow-name-with-an-overflowing-tail");
+        workspace.active.initial_page(long_page());
+        for _ in 0..15 {
+            update(&mut workspace, &config, app::Message::AnimateCell);
+        }
+        let offset = workspace.active.cell_scroll.offset();
+        assert!(offset > 0);
+        update(
+            &mut workspace,
+            &config,
+            app::Message::Action(Action::Profiles),
+        );
+        for _ in 0..20 {
+            update(&mut workspace, &config, app::Message::AnimateCell);
+        }
+        assert_eq!(workspace.active.cell_scroll.offset(), offset);
+        send(&mut workspace, &config, Message::Cancel);
+        update(&mut workspace, &config, app::Message::AnimateCell);
+        assert!(workspace.active.cell_scrolling());
+        for name in ["staging", "development"] {
+            let (id, _) = prepare(&mut workspace, &config, name);
+            for _ in 0..20 {
+                update(&mut workspace, &config, app::Message::AnimateCell);
+            }
+            send(
+                &mut workspace,
+                &config,
+                Message::Prepared {
+                    id,
+                    result: Ok(long_page()),
+                },
+            );
+            assert_eq!(workspace.active.cell_scroll.offset(), 0);
+            for _ in 0..10 {
+                update(&mut workspace, &config, app::Message::AnimateCell);
+            }
+            assert!(workspace.active.cell_scroll.offset() > 0);
+        }
     }
 
     #[test]
